@@ -1,0 +1,73 @@
+{
+    "ui": {
+        "sashes": {
+            "main": null,
+            "top_view": null
+        },
+        "dpi_scaling": "auto"
+    },
+    "update": {
+        "enabled": true,
+        "check_on_start": true,
+        "feed_url": ""
+    },
+    "costs": {
+        "powder_brl_kg": 700.0,
+        "gas_argon_brl_m3": 50.0,
+        "labor_brl_hour": 40.0,
+        "machine_brl_hour": 250.0,
+        "currency_symbol": "R$",
+        "po_metalico_eur_kg": 50.0,
+        "gas_argonio_eur_hora": 15.0,
+        "mao_de_obra_eur_hora": 25.0,
+        "hora_maquina_eur_hora": 20.0
+    },
+    "powders": [
+        {
+            "name": "INOX",
+            "density_factor_g_mm2": 0.07,
+            "cost_brl_kg": 1254.0
+        },
+        {
+            "name": "P\u00f3 2",
+            "density_factor_g_mm2": 0.16,
+            "cost_brl_kg": 700.0
+        }
+    ],
+    "active_powder": "P\u00f3 2",
+    "formulas": {
+        "expressions": {
+            "circumference_mm": "math.pi * diametro",
+            "rotation_rpm": "(velocidade_de_deposicao / max(circumference_mm, 1e-6)) * 60",
+            "rotation_mm_min": "circumference_mm * rotation_rpm",
+            "helix_pitch_mm": "velocidade_de_deposicao / max(rotation_rpm, 1e-6)",
+            "effective_step_mm": "largura_cordao * (1 - (sobreposicao/100))",
+            "axial_passes_per_layer": "math.ceil(comprimento_revestir / max(effective_step_mm, 1e-6))",
+            "total_length_mm_per_layer": "circumference_mm * axial_passes_per_layer",
+            "total_length_mm_all_layers": "total_length_mm_per_layer * num_camadas",
+            "time_min": "total_length_mm_all_layers / max(velocidade_de_deposicao, 1e-6)",
+            "rotations_total": "rotation_rpm * (time_min/60.0)",
+            "gas_consumption_l": "vazao_gas * time_min",
+            "powder_mass_kg": "((circumference_mm * (comprimento_revestir + lead_in + lead_out) / 10000) * (num_camadas * espessura_camada) * powder_factor)",
+            "powder_mass_g": "powder_mass_kg * 1000",
+            "taxa_deposicao_kg_h": "taxa_deposicao_g_h / 1000.0",
+            "time_min_mass": "(powder_mass_kg / max(taxa_deposicao_kg_h, 1e-6)) * 60.0",
+            "powder_cost_brl": "powder_mass_kg * powder_cost_brl_kg",
+            "labor_cost_brl": "(time_min/60.0) * labor_brl_hour",
+            "machine_cost_brl": "(time_min/60.0) * machine_brl_hour",
+            "gas_cost_brl": "(gas_consumption_l/1000.0) * gas_argon_brl_m3",
+            "total_cost_brl": "powder_cost_brl + labor_cost_brl + machine_cost_brl + gas_cost_brl"
+        },
+        "notes": "Vari\u00e1veis dispon\u00edveis: diametro, comprimento_revestir, lead_in, lead_out, largura_cordao, sobreposicao, velocidade_de_deposicao, num_camadas, espessura_camada, vazao_gas, powder_factor (g/mm\u00b2), powder_cost_brl_kg, labor_brl_hour, machine_brl_hour, gas_argon_brl_m3, taxa_deposicao_g_h, taxa_deposicao_kg_h, time_min_mass. Fun\u00e7\u00f5es: math, pi, sin, cos, tan, abs, round, min, max, ceil, floor. Consumo de p\u00f3 calculado por \u00e1rea e espessura * fator."
+    },
+    "database": {
+        "procedures_path": "procedures"
+    },
+    "integration": {
+        "mach3_path": "C:/Mach3/Mach3.exe",
+        "gcode_dir": "C:/Mach3/GCode",
+        "write_autoload_txt": true,
+        "allow_file_association_fallback": false,
+        "mach3_profile": "PTA"
+    }
+}

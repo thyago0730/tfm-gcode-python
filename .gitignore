@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Logs e temporários
+*.log
+*.tmp
+*.temp
+LastErrors.txt
+
+# Test artifacts (mantém .gitkeep)
+tests/analysis/*
+!tests/analysis/.gitkeep
+
+# Build/Dist
+build/
+dist/
+scripts/build/
+scripts/dist/
+
+# PyInstaller
+# (mantemos arquivos .spec no repositório)
+
+# IDE/OS
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Ambiente
+.env
+
