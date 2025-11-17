@@ -1501,7 +1501,7 @@ class SettingsWindow(Toplevel):
             self.parent_app.show_notification(f'Erro ao importar: {e}', 'error')
 
 # Versão do aplicativo para controle de atualização
-APP_VERSION = "1.0"
+APP_VERSION = "1.0.2"
 
 # --- CLASSE PRINCIPAL ---
 class TFM_GCODE:
@@ -1611,7 +1611,15 @@ class TFM_GCODE:
         if filepath is None:
             if getattr(sys, 'frozen', False):
                 base_dir = Path(sys.executable).resolve().parent
-                filepath = str(base_dir / 'config.json')
+                # Preferir arquivo em subpasta 'config/' distribuído pela .spec; cair para raiz se não existir
+                primary = base_dir / 'config.json'
+                secondary = base_dir / 'config' / 'config.json'
+                if secondary.exists():
+                    filepath = str(secondary)
+                elif primary.exists():
+                    filepath = str(primary)
+                else:
+                    filepath = str(secondary)
             else:
                 # src/app/TFM_GCODE.py -> projeto raiz está 2 níveis acima
                 base_dir = Path(__file__).resolve().parents[2]
@@ -1628,8 +1636,8 @@ class TFM_GCODE:
             "update": {
                 "enabled": True,
                 "check_on_start": True,
-                # Por padrão, usa arquivo local em desenvolvimento; producao deve apontar para URL http(s)
-                "feed_url": ""
+                # Em produção, apontar para URL http(s); aqui definimos um padrão seguro
+                "feed_url": "https://thyago0730.github.io/tfm-gcode-python/latest.json"
             },
             "costs": {
                 "powder_brl_kg": 250.0,
@@ -1688,6 +1696,15 @@ class TFM_GCODE:
                     pass
         except (FileNotFoundError, json.JSONDecodeError):
             pass
+        # Normaliza feed de atualização: se vazio, aplica padrão seguro
+        try:
+            upd = config.get('update') or {}
+            if not (upd.get('feed_url') or '').strip():
+                upd['feed_url'] = "https://thyago0730.github.io/tfm-gcode-python/latest.json"
+                config['update'] = upd
+        except Exception:
+            pass
+
         self.save_config(filepath, config)
         return config
 
@@ -1724,6 +1741,11 @@ class TFM_GCODE:
                 return
             feed = self._get_update_feed_url()
             if not feed:
+                if not silent:
+                    try:
+                        self.show_notification('Feed de atualização não configurado.', 'warning')
+                    except Exception:
+                        pass
                 return
 
             # Carrega latest.json (arquivo local ou via HTTP)
@@ -2210,7 +2232,8 @@ class TFM_GCODE:
 
         # Visualizadores (dentro do top_view_pane)
         # Agora com navegação por abas dentro da área do visualizador
-        self.visualizer_frame = ttk.LabelFrame(self.top_view_pane, text="Visualizador (Abas)", padding=5)
+        # Remove o título: usa Frame simples em vez de LabelFrame
+        self.visualizer_frame = ttk.Frame(self.top_view_pane, padding=5)
         self.top_view_pane.add(self.visualizer_frame, stretch="always")
 
         # Notebook de abas para navegação entre visualizações
@@ -2345,7 +2368,8 @@ class TFM_GCODE:
                 pass
         self.visualizer_notebook.bind("<<NotebookTabChanged>>", _on_visualizer_tab_changed)
         
-        self.gcode_viewer_frame = ttk.LabelFrame(self.top_view_pane, text="Visualizador G-Code", padding=5); self.top_view_pane.add(self.gcode_viewer_frame, stretch="never")
+        # Remove o título: usa Frame simples em vez de LabelFrame
+        self.gcode_viewer_frame = ttk.Frame(self.top_view_pane, padding=5); self.top_view_pane.add(self.gcode_viewer_frame, stretch="never")
         # Cabeçalho removido: sem seta para alternar painel direito
         self.gcode_line_count_var = tk.StringVar(value="Linhas: -")
         self.gcode_line_count_label = ttk.Label(self.gcode_viewer_frame, textvariable=self.gcode_line_count_var, font=("Courier New", 9, 'bold'))
@@ -2689,6 +2713,11 @@ class TFM_GCODE:
         # Configurações já adicionadas em _create_menu; evitar duplicidade
         # Menu 'Simuladores' removido
         self.menubar.add_cascade(label="Ajuda", menu=self.help_menu); self.help_menu.add_command(label="Sobre", command=self._show_about_dialog)
+        try:
+            self.help_menu.add_separator()
+            self.help_menu.add_command(label="Verificar atualização...", command=lambda: self._check_for_updates(silent=False))
+        except Exception:
+            pass
         # Nomes das abas, labels, etc., já definidos em _create_widgets
         # Atualiza o prefixo do contador de linhas (caso o idioma fosse trocado, mas agora é fixo)
         if hasattr(self, 'gcode_line_count_var'):
@@ -3861,7 +3890,11 @@ class TFM_GCODE:
             self._restore_sash_positions()
 
     def _show_about_dialog(self):
-         self.show_notification("TFM G-Code Generator v11.1\nDesenvolvido para TFM Usinagem & Manutenção Industrial LTDA.\nTodos os direitos reservados.", 'info', duration_ms=10000)
+         try:
+             ver = APP_VERSION
+         except Exception:
+             ver = "(desconhecida)"
+         self.show_notification(f"TFM G-Code Generator v{ver}\nDesenvolvido para TFM Usinagem & Manutenção Industrial LTDA.\nTodos os direitos reservados.", 'info', duration_ms=10000)
 
     def _select_mach3_path(self):
         initial_dir = r"C:\\Mach3" if os.path.exists(r"C:\\Mach3") else os.path.expanduser("~")
