@@ -9,7 +9,7 @@
     "update": {
         "enabled": true,
         "check_on_start": true,
-        "feed_url": ""
+        "feed_url": "https://thyago0730.github.io/tfm-gcode-python/latest.json"
     },
     "costs": {
         "powder_brl_kg": 700.0,
