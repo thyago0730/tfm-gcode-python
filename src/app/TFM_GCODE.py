@@ -1589,13 +1589,44 @@ class TFM_GCODE:
 
     def show_notification(self, message, msg_type='info', duration_ms=5000):
         if self._notification_job_id: self.root.after_cancel(self._notification_job_id); self._notification_job_id = None
-        style_map = {'info': 'Info.TLabel', 'success': 'Success.TLabel', 'warning': 'Warning.TLabel', 'error': 'Error.TLabel'}; style_name = style_map.get(msg_type, 'Info.TLabel')
-        self.notification_label.config(text=message, style=style_name); self.notification_frame.grid()
-        if msg_type != 'error' and duration_ms > 0: self._notification_job_id = self.root.after(duration_ms, self.hide_notification)
+        # Prefixo com carimbo de tempo e tipo
+        from datetime import datetime
+        prefix_map = {'info': '[INFO]', 'success': '[SUCESSO]', 'warning': '[AVISO]', 'error': '[ERRO]'}
+        prefix = prefix_map.get(msg_type, '[INFO]')
+        ts = datetime.now().strftime('%H:%M:%S')
+        line = f"{ts} {prefix} {message}\n"
+        try:
+            if hasattr(self, 'notification_text'):
+                self.notification_text.config(state='normal')
+                self.notification_text.insert(tk.END, line)
+                self.notification_text.see(tk.END)
+                self.notification_text.config(state='disabled')
+            else:
+                # Fallback para label caso o campo não exista
+                self.notification_label.config(text=message)
+        except Exception:
+            pass
+        # Opcionalmente, limpar destaque após duração (não oculta o painel)
+        if duration_ms > 0:
+            self._notification_job_id = self.root.after(duration_ms, lambda: None)
 
     def hide_notification(self):
-        self.notification_frame.grid_remove(); self.notification_label.config(text="")
-        if self._notification_job_id: self.root.after_cancel(self._notification_job_id); self._notification_job_id = None
+        # Não ocultar o painel para evitar distorção de layout; apenas cancelar timers
+        if self._notification_job_id:
+            try: self.root.after_cancel(self._notification_job_id)
+            except Exception: pass
+            self._notification_job_id = None
+
+    def _clear_notifications(self):
+        try:
+            if hasattr(self, 'notification_text'):
+                self.notification_text.config(state='normal')
+                self.notification_text.delete('1.0', tk.END)
+                self.notification_text.config(state='disabled')
+            else:
+                self.notification_label.config(text="")
+        except Exception:
+            pass
 
     def trigger_update(self, *args):
         if self._update_job_id: self.root.after_cancel(self._update_job_id)
@@ -2008,7 +2039,7 @@ class TFM_GCODE:
              if not self._sash_configured and self.main_paned_window.winfo_width() > 1 and self.top_view_pane.winfo_width() > 1:
                  try:
                      main_pane_width = self.main_paned_window.winfo_width(); controls_width = int(main_pane_width * 0.25); self.main_paned_window.sash_place(0, controls_width, 0)
-                     top_view_pane_width = self.top_view_pane.winfo_width(); gcode_width = int(top_view_pane_width * 0.30); self.top_view_pane.sash_place(0, top_view_pane_width - gcode_width, 0)
+                     top_view_pane_width = self.top_view_pane.winfo_width(); gcode_width = int(top_view_pane_width * 0.25); self.top_view_pane.sash_place(0, top_view_pane_width - gcode_width, 0)
                      try:
                          self._sash_top = self.top_view_pane.sash_coord(0)
                      except tk.TclError:
@@ -2369,7 +2400,12 @@ class TFM_GCODE:
         self.visualizer_notebook.bind("<<NotebookTabChanged>>", _on_visualizer_tab_changed)
         
         # Remove o título: usa Frame simples em vez de LabelFrame
-        self.gcode_viewer_frame = ttk.Frame(self.top_view_pane, padding=5); self.top_view_pane.add(self.gcode_viewer_frame, stretch="never")
+        self.gcode_viewer_frame = ttk.Frame(self.top_view_pane, padding=5); self.top_view_pane.add(self.gcode_viewer_frame, stretch="always")
+        # Garantir largura mínima para acomodar todos os botões e barra de busca
+        try:
+            self.top_view_pane.paneconfigure(self.gcode_viewer_frame, minsize=300)
+        except Exception:
+            pass
         # Cabeçalho removido: sem seta para alternar painel direito
         self.gcode_line_count_var = tk.StringVar(value="Linhas: -")
         self.gcode_line_count_label = ttk.Label(self.gcode_viewer_frame, textvariable=self.gcode_line_count_var, font=("Courier New", 9, 'bold'))
@@ -2408,7 +2444,7 @@ class TFM_GCODE:
         ttk.Checkbutton(gcode_search_frame, text="A", variable=self.filter_a, command=self._apply_axis_filters).pack(side=tk.LEFT)
         gcode_text_frame = ttk.Frame(self.gcode_viewer_frame); gcode_text_frame.pack(fill=tk.BOTH, expand=True); gcode_text_frame.rowconfigure(0, weight=1); gcode_text_frame.columnconfigure(0, weight=1)
         gcode_vscroll = ttk.Scrollbar(gcode_text_frame, orient=tk.VERTICAL); gcode_hscroll = ttk.Scrollbar(gcode_text_frame, orient=tk.HORIZONTAL)
-        self.gcode_text = Text(gcode_text_frame, wrap=tk.NONE, yscrollcommand=gcode_vscroll.set, xscrollcommand=gcode_hscroll.set, font=("Courier New", 9), state='disabled', width=40)
+        self.gcode_text = Text(gcode_text_frame, wrap=tk.NONE, yscrollcommand=gcode_vscroll.set, xscrollcommand=gcode_hscroll.set, font=("Courier New", 9), state='disabled', width=52)
         gcode_vscroll.config(command=self.gcode_text.yview); gcode_hscroll.config(command=self.gcode_text.xview)
         gcode_vscroll.grid(row=0, column=1, sticky='ns'); gcode_hscroll.grid(row=1, column=0, sticky='ew', columnspan=2); self.gcode_text.grid(row=0, column=0, sticky='nsew')
         # Configura tags de coloração semântica
@@ -2430,9 +2466,19 @@ class TFM_GCODE:
         ToolTip(self.open_mach3_btn, "Salvar e abrir no Mach3")
         
         # Barra de Notificação
-        self.notification_frame = ttk.Frame(main_frame, style='Notification.TFrame'); self.notification_label = ttk.Label(self.notification_frame, text="", anchor='w', padding=(10, 5), style='Notification.TLabel')
-        self.notification_label.pack(side=tk.LEFT, fill=tk.X, expand=True); close_button = ttk.Button(self.notification_frame, text="X", command=self.hide_notification, style='Close.TButton', width=2)
-        close_button.pack(side=tk.RIGHT, padx=(0, 5)); self.notification_frame.grid(row=1, column=0, sticky='ew', pady=(5, 0)); self.notification_frame.grid_remove()
+        # Campo fixo de notificações com rolagem, sempre visível para evitar reflow
+        self.notification_frame = ttk.Frame(main_frame, style='Notification.TFrame')
+        self.notification_frame.grid(row=1, column=0, sticky='ew', pady=(5, 0))
+        self.notification_frame.columnconfigure(0, weight=1)
+        self.notification_frame.rowconfigure(0, weight=1)
+        self.notification_frame.columnconfigure(2, minsize=70)
+        notif_scroll = ttk.Scrollbar(self.notification_frame, orient=tk.VERTICAL)
+        self.notification_text = Text(self.notification_frame, height=4, wrap=tk.WORD, yscrollcommand=notif_scroll.set, state='disabled', font=("Segoe UI", 9))
+        notif_scroll.config(command=self.notification_text.yview)
+        self.notification_text.grid(row=0, column=0, sticky='nsew')
+        notif_scroll.grid(row=0, column=1, sticky='ns')
+        clear_button = ttk.Button(self.notification_frame, text="Limpar", command=self._clear_notifications, style='Notification.TButton', width=6)
+        clear_button.grid(row=0, column=2, sticky='e', padx=(6, 5), pady=(2, 2))
 
         # Adiciona traces
         for var_name, var in self.params.items():
@@ -2680,8 +2726,9 @@ class TFM_GCODE:
         s.configure('DryRun.TButton', font=('Segoe UI', 10, 'bold'), padding=(10, 6), background='#FFC26A', foreground=BLACK)
         s.map('DryRun.TButton', background=[('active', '#FFB14D')])
 
-        s.configure('Close.TButton', padding=(2,0), font=('Segoe UI', 8), background=BLACK, foreground=WHITE)
-        s.map('Close.TButton', background=[('active', '#222222')])
+        # Botão de limpar notificações, estilo claro
+        s.configure('Notification.TButton', font=('Segoe UI', 9), padding=(8, 4), background=WHITE, foreground=BLACK)
+        s.map('Notification.TButton', background=[('active', '#E6E6E6'), ('disabled', '#F5F5F5')], foreground=[('disabled', '#A0A0A0')])
 
         # Combobox
         s.configure('TCombobox', fieldbackground=WHITE, background=WHITE, foreground=BLACK)
@@ -2696,7 +2743,8 @@ class TFM_GCODE:
         s.map('Icon.TButton', background=[('active', ORANGE_DARK)])
 
         # Barra de notificação
-        s.configure('Notification.TFrame', background=BLACK)
+        # Fundo do painel de notificações em branco para evitar contraste escuro
+        s.configure('Notification.TFrame', background=WHITE)
         s.configure('Notification.TLabel', background=BLACK, foreground=WHITE, font=('Segoe UI', 9))
         s.configure('Info.TLabel', background='#d1ecf1', foreground='#0c5460', font=('Segoe UI', 9))
         s.configure('Success.TLabel', background='#d4edda', foreground='#155724', font=('Segoe UI', 9))

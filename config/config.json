@@ -1,8 +1,14 @@
 {
     "ui": {
         "sashes": {
-            "main": null,
-            "top_view": null
+            "main": {
+                "x": 475,
+                "y": 1
+            },
+            "top_view": {
+                "x": 1028,
+                "y": 1
+            }
         },
         "dpi_scaling": "auto"
     },
@@ -34,7 +40,7 @@
             "cost_brl_kg": 700.0
         }
     ],
-    "active_powder": "P\u00f3 2",
+    "active_powder": "INOX",
     "formulas": {
         "expressions": {
             "circumference_mm": "math.pi * diametro",
