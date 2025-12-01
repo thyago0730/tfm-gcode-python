@@ -1,0 +1,87 @@
+name: Release TFM_GCODE
+
+on:
+  push:
+    tags:
+      - 'v*'
+  create:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller numpy matplotlib
+
+      - name: Compute version from tag
+        shell: bash
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+
+      - name: Bump APP_VERSION in source to match tag
+        run: |
+          $path = "src/app/TFM_GCODE.py"
+          $content = Get-Content -Raw $path
+          $new = $content -replace 'APP_VERSION = "[^"]+"', "APP_VERSION = \"$env:VERSION\""
+          Set-Content -Path $path -Value $new
+
+      - name: Commit version bump
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: |
+            src/app/TFM_GCODE.py
+          message: "release: bump APP_VERSION to ${{ env.VERSION }}"
+          branch: main
+          push: true
+
+      - name: Build executable (nosplash)
+        run: |
+          python -m PyInstaller scripts/TFM_GCODE_nosplash.spec
+
+      - name: Copy executable to docs for Pages
+        run: |
+          Copy-Item -Path "scripts/dist/TFM_GCODE.exe" -Destination "docs/TFM_GCODE.exe" -Force
+
+      - name: Update docs/latest.json with Release asset URL
+        run: |
+          python scripts/make_latest_json.py --version $env:VERSION --asset-url "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/TFM_GCODE.exe" --installer-path "scripts/dist/TFM_GCODE.exe"
+
+      - name: Commit docs updates (latest.json, executable)
+        uses: EndBug/add-and-commit@v9
+        with:
+          add: |
+            docs/latest.json
+            docs/TFM_GCODE.exe
+          message: "release: atualiza docs e latest.json ${{ env.VERSION }}"
+          branch: main
+          push: true
+
+      - name: Create GitHub Release and upload asset
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: TFM_GCODE ${{ env.VERSION }}
+          body: |
+            UI mais compacta, notificações com histórico e botão "Limpar" branco alinhado.
+            Esta versão foi construída automaticamente via GitHub Actions.
+          files: |
+            scripts/dist/TFM_GCODE.exe
