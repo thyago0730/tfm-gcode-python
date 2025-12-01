@@ -19,6 +19,7 @@ import urllib.request
 import hashlib
 import tempfile
 from pathlib import Path
+import time
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
@@ -1783,7 +1784,10 @@ class TFM_GCODE:
             data = None
             try:
                 if '://' in feed and feed.lower().startswith(('http://', 'https://')):
-                    with urllib.request.urlopen(feed, timeout=5) as resp:
+                    # Evita cache agressivo do CDN adicionando cache-buster
+                    sep = '&' if '?' in feed else '?'
+                    feed_cb = f"{feed}{sep}cb={int(time.time())}"
+                    with urllib.request.urlopen(feed_cb, timeout=5) as resp:
                         raw = resp.read().decode('utf-8', errors='replace')
                         data = json.loads(raw)
                 else:
