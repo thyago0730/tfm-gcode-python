@@ -53,6 +53,16 @@ jobs:
           branch: main
           push: true
 
+      - name: Verify APP_VERSION matches tag version
+        run: |
+          $path = "src/app/TFM_GCODE.py"
+          $content = Get-Content -Raw $path
+          $m = [Regex]::Match($content, 'APP_VERSION\s*=\s*"([^"]+)"')
+          if (-not $m.Success) { Write-Error "APP_VERSION not found in $path" }
+          $codeVersion = $m.Groups[1].Value
+          Write-Host "Code APP_VERSION="$codeVersion"; Tag VERSION="$env:VERSION""
+          if ($codeVersion -ne $env:VERSION) { Write-Error "APP_VERSION ($codeVersion) != tag VERSION ($env:VERSION)" }
+
       - name: Build executable (nosplash)
         run: |
           python -m PyInstaller scripts/TFM_GCODE_nosplash.spec
