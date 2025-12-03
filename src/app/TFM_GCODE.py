@@ -1506,7 +1506,7 @@ class SettingsWindow(Toplevel):
             self.parent_app.show_notification(f'Erro ao importar: {e}', 'error')
 
 # Versão do aplicativo para controle de atualização
-APP_VERSION = "1.1.3"
+APP_VERSION = "1.1.4"
 
 # --- CLASSE PRINCIPAL ---
 class TFM_GCODE:
