@@ -20,6 +20,8 @@ import hashlib
 import tempfile
 from pathlib import Path
 import time
+import ssl
+import traceback
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
@@ -1787,17 +1789,26 @@ class TFM_GCODE:
                     # Evita cache agressivo do CDN adicionando cache-buster
                     sep = '&' if '?' in feed else '?'
                     feed_cb = f"{feed}{sep}cb={int(time.time())}"
-                    with urllib.request.urlopen(feed_cb, timeout=5) as resp:
+                    # Define um User-Agent amigável e contexto TLS
+                    req = urllib.request.Request(feed_cb, headers={'User-Agent': 'TFM-GCODE-Updater/1.1'})
+                    with urllib.request.urlopen(req, timeout=10) as resp:
                         raw = resp.read().decode('utf-8', errors='replace')
                         data = json.loads(raw)
                 else:
                     # caminho local
                     with open(feed, 'r', encoding='utf-8') as f:
                         data = json.load(f)
-            except Exception:
+            except Exception as e:
                 if not silent:
                     try:
-                        self.show_notification('Falha ao checar atualização.', 'error')
+                        # Log detalhado da falha do feed
+                        try:
+                            err_file = Path(tempfile.gettempdir()) / 'tfm_update_error.log'
+                            with open(err_file, 'a', encoding='utf-8') as lf:
+                                lf.write(f"{datetime.now().isoformat()} Falha ao checar atualização em {feed}:\n{traceback.format_exc()}\n")
+                        except Exception:
+                            pass
+                        self.show_notification(f'Falha ao checar atualização: {e}', 'error')
                     except Exception:
                         pass
                 return
@@ -1841,15 +1852,28 @@ class TFM_GCODE:
                     installer_url_cb = f"{installer_url}{sep_inst}cb={int(time.time())}"
                 else:
                     installer_url_cb = installer_url
-                with urllib.request.urlopen(installer_url_cb, timeout=180) as resp:
-                    h = hashlib.sha256()
-                    with open(dest, 'wb') as outf:
-                        while True:
-                            chunk = resp.read(1024 * 64)
-                            if not chunk:
-                                break
-                            outf.write(chunk)
-                            h.update(chunk)
+                # Faz download com contexto TLS e User-Agent, com pequenas tentativas
+                h = hashlib.sha256()
+                req = urllib.request.Request(installer_url_cb, headers={'User-Agent': 'TFM-GCODE-Updater/1.1'})
+                ctx = ssl.create_default_context()
+                last_err = None
+                for attempt in range(3):
+                    try:
+                        with urllib.request.urlopen(req, timeout=180, context=ctx) as resp:
+                            with open(dest, 'wb') as outf:
+                                while True:
+                                    chunk = resp.read(1024 * 64)
+                                    if not chunk:
+                                        break
+                                    outf.write(chunk)
+                                    h.update(chunk)
+                        last_err = None
+                        break
+                    except Exception as e:
+                        last_err = e
+                        time.sleep(1 * (attempt + 1))
+                if last_err is not None:
+                    raise last_err
                 if sha256_expected:
                     digest = h.hexdigest()
                     if digest.lower() != sha256_expected.lower():
@@ -1884,9 +1908,22 @@ class TFM_GCODE:
                     self.root.quit()
                 except Exception:
                     pass
-            except Exception:
+            except Exception as e:
                 try:
-                    self.show_notification('Falha ao baixar o instalador.', 'error')
+                    # Log detalhado sobre erro de download
+                    try:
+                        err_file = Path(tempfile.gettempdir()) / 'tfm_update_error.log'
+                        with open(err_file, 'a', encoding='utf-8') as lf:
+                            lf.write(f"{datetime.now().isoformat()} Falha ao baixar instalador de {installer_url}:\n{traceback.format_exc()}\n")
+                    except Exception:
+                        pass
+                    self.show_notification(f'Falha ao baixar o instalador: {e}', 'error')
+                    # Abre URL no navegador para alternativa manual
+                    try:
+                        if installer_url:
+                            webbrowser.open(installer_url)
+                    except Exception:
+                        pass
                 except Exception:
                     pass
         except Exception:
