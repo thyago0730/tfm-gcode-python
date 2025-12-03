@@ -1835,7 +1835,13 @@ class TFM_GCODE:
                 tmp_dir = Path(tempfile.gettempdir())
                 fname = 'TFM_GCODE_Setup.exe'
                 dest = tmp_dir / fname
-                with urllib.request.urlopen(installer_url, timeout=30) as resp:
+                # Evita cache agressivo do CDN adicionando cache-buster
+                if '://' in installer_url and installer_url.lower().startswith(('http://', 'https://')):
+                    sep_inst = '&' if '?' in installer_url else '?'
+                    installer_url_cb = f"{installer_url}{sep_inst}cb={int(time.time())}"
+                else:
+                    installer_url_cb = installer_url
+                with urllib.request.urlopen(installer_url_cb, timeout=30) as resp:
                     content = resp.read()
                 with open(dest, 'wb') as outf:
                     outf.write(content)
