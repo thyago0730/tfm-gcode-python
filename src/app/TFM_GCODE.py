@@ -22,6 +22,8 @@ from pathlib import Path
 import time
 import ssl
 import traceback
+import socket
+import urllib.error
 
 from matplotlib.figure import Figure
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
@@ -1743,6 +1745,32 @@ class TFM_GCODE:
         return config
 
     # --- Atualização automática ---
+    def _friendly_error_message(self, e: Exception, url: str, phase: str) -> str:
+        try:
+            if isinstance(e, urllib.error.HTTPError):
+                code = getattr(e, 'code', None)
+                reason = getattr(e, 'reason', '')
+                if code == 404:
+                    return f"Falha {phase}: HTTP 404 (arquivo não encontrado)."
+                if code == 403:
+                    return f"Falha {phase}: HTTP 403 (acesso negado — proxy/AV pode bloquear)."
+                if code == 500:
+                    return f"Falha {phase}: HTTP 500 (erro do servidor)."
+                return f"Falha {phase}: HTTP {code} ({reason})."
+            if isinstance(e, urllib.error.URLError):
+                r = getattr(e, 'reason', e)
+                if isinstance(r, socket.timeout):
+                    return f"Falha {phase}: timeout na conexão (verifique sua internet)."
+                if isinstance(r, ssl.SSLError):
+                    return f"Falha {phase}: erro de certificado SSL (proxy/antivírus interceptando?)."
+                return f"Falha {phase}: erro de rede ({r})."
+            if isinstance(e, socket.timeout):
+                return f"Falha {phase}: timeout na conexão (verifique sua internet)."
+            if isinstance(e, PermissionError):
+                return f"Falha {phase}: permissão negada para salvar/abrir arquivo (antivírus?)."
+            return f"Falha {phase}: {str(e)}"
+        except Exception:
+            return f"Falha {phase}."
     def _parse_version(self, v: str):
         try:
             return tuple(int(x) for x in str(v).strip().split('.'))
@@ -1808,7 +1836,8 @@ class TFM_GCODE:
                                 lf.write(f"{datetime.now().isoformat()} Falha ao checar atualização em {feed}:\n{traceback.format_exc()}\n")
                         except Exception:
                             pass
-                        self.show_notification(f'Falha ao checar atualização: {e}', 'error')
+                        msg = self._friendly_error_message(e, feed, 'ao checar atualização')
+                        self.show_notification(msg, 'error')
                     except Exception:
                         pass
                 return
@@ -1917,7 +1946,8 @@ class TFM_GCODE:
                             lf.write(f"{datetime.now().isoformat()} Falha ao baixar instalador de {installer_url}:\n{traceback.format_exc()}\n")
                     except Exception:
                         pass
-                    self.show_notification(f'Falha ao baixar o instalador: {e}', 'error')
+                    msg = self._friendly_error_message(e, installer_url, 'ao baixar o instalador')
+                    self.show_notification(msg, 'error')
                     # Abre URL no navegador para alternativa manual
                     try:
                         if installer_url:
