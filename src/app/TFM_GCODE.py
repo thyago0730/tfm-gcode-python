@@ -1859,9 +1859,22 @@ class TFM_GCODE:
                             pass
                         return
                 # Executa instalador e encerra app
+                started = False
                 try:
-                    subprocess.Popen([str(dest)], shell=True)
+                    # Preferência: iniciar via shell do Windows
+                    if os.name == 'nt':
+                        try:
+                            os.startfile(str(dest))  # abre como se fosse duplo-clique
+                            started = True
+                        except Exception:
+                            started = False
+                    if not started:
+                        # Fallback multiplataforma sem shell
+                        subprocess.Popen([str(dest)], shell=False)
+                        started = True
                 except Exception:
+                    started = False
+                if not started:
                     try:
                         self.show_notification('Não foi possível iniciar o instalador.', 'error')
                     except Exception:
