@@ -1506,7 +1506,7 @@ class SettingsWindow(Toplevel):
             self.parent_app.show_notification(f'Erro ao importar: {e}', 'error')
 
 # Versão do aplicativo para controle de atualização
-APP_VERSION = "1.1.2"
+APP_VERSION = "1.1.3"
 
 # --- CLASSE PRINCIPAL ---
 class TFM_GCODE:
@@ -1745,7 +1745,7 @@ class TFM_GCODE:
         return config
 
     # --- Atualização automática ---
-    def _friendly_error_message(self, e: Exception, url: str, phase: str) -> str:
+    def _friendly_error_message(self, e: Exception, url: str, phase: str, dest_path: str | None = None) -> str:
         try:
             if isinstance(e, urllib.error.HTTPError):
                 code = getattr(e, 'code', None)
@@ -1767,10 +1767,36 @@ class TFM_GCODE:
             if isinstance(e, socket.timeout):
                 return f"Falha {phase}: timeout na conexão (verifique sua internet)."
             if isinstance(e, PermissionError):
+                if dest_path:
+                    return (
+                        f"Falha {phase}: permissão negada ao salvar/abrir em '{dest_path}'. "
+                        f"Antivírus/SmartScreen pode bloquear; adicione exceção para esta pasta ou execute manualmente."
+                    )
                 return f"Falha {phase}: permissão negada para salvar/abrir arquivo (antivírus?)."
             return f"Falha {phase}: {str(e)}"
         except Exception:
             return f"Falha {phase}."
+
+    def _get_update_download_dir(self):
+        try:
+            from pathlib import Path as _P
+            lad = os.environ.get('LOCALAPPDATA')
+            if lad:
+                p = _P(lad) / 'TFM_GCODE' / 'Updates'
+                try:
+                    p.mkdir(parents=True, exist_ok=True)
+                    return p
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        try:
+            from pathlib import Path as _P
+            p = _P(tempfile.gettempdir()) / 'TFM_GCODE_Updates'
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            return _P(tempfile.gettempdir())
     def _parse_version(self, v: str):
         try:
             return tuple(int(x) for x in str(v).strip().split('.'))
@@ -1870,9 +1896,9 @@ class TFM_GCODE:
                     pass
                 return
 
-            # Baixa instalador para pasta temporária
+            # Baixa instalador para pasta do usuário (%LocalAppData%)
             try:
-                tmp_dir = Path(tempfile.gettempdir())
+                tmp_dir = self._get_update_download_dir()
                 fname = 'TFM_GCODE_Setup.exe'
                 dest = tmp_dir / fname
                 # Evita cache agressivo do CDN adicionando cache-buster
@@ -1941,12 +1967,13 @@ class TFM_GCODE:
                 try:
                     # Log detalhado sobre erro de download
                     try:
-                        err_file = Path(tempfile.gettempdir()) / 'tfm_update_error.log'
+                        err_dir = self._get_update_download_dir()
+                        err_file = err_dir / 'tfm_update_error.log'
                         with open(err_file, 'a', encoding='utf-8') as lf:
-                            lf.write(f"{datetime.now().isoformat()} Falha ao baixar instalador de {installer_url}:\n{traceback.format_exc()}\n")
+                            lf.write(f"{datetime.now().isoformat()} Falha ao baixar instalador de {installer_url} para {dest}:\n{traceback.format_exc()}\n")
                     except Exception:
                         pass
-                    msg = self._friendly_error_message(e, installer_url, 'ao baixar o instalador')
+                    msg = self._friendly_error_message(e, installer_url, 'ao baixar o instalador', str(dest))
                     self.show_notification(msg, 'error')
                     # Abre URL no navegador para alternativa manual
                     try:
