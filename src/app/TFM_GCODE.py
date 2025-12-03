@@ -1841,14 +1841,16 @@ class TFM_GCODE:
                     installer_url_cb = f"{installer_url}{sep_inst}cb={int(time.time())}"
                 else:
                     installer_url_cb = installer_url
-                with urllib.request.urlopen(installer_url_cb, timeout=30) as resp:
-                    content = resp.read()
-                with open(dest, 'wb') as outf:
-                    outf.write(content)
-                # Valida SHA-256, se fornecido
-                if sha256_expected:
+                with urllib.request.urlopen(installer_url_cb, timeout=180) as resp:
                     h = hashlib.sha256()
-                    h.update(content)
+                    with open(dest, 'wb') as outf:
+                        while True:
+                            chunk = resp.read(1024 * 64)
+                            if not chunk:
+                                break
+                            outf.write(chunk)
+                            h.update(chunk)
+                if sha256_expected:
                     digest = h.hexdigest()
                     if digest.lower() != sha256_expected.lower():
                         try:
