@@ -13,6 +13,8 @@ def remove_dir_contents(dir_path: Path):
     if not dir_path.exists():
         return
     for entry in dir_path.iterdir():
+        if entry.name == '.gitkeep':
+            continue
         try:
             if entry.is_file():
                 entry.unlink(missing_ok=True)
@@ -36,14 +38,6 @@ def cleanup(project_root: Path | None = None):
                 p.unlink(missing_ok=True)
             except Exception:
                 pass
-
-    # Opcional: limpar diretório vazio
-    try:
-        if analysis_dir.exists() and not any(analysis_dir.iterdir()):
-            # mantém .gitkeep
-            pass
-    except Exception:
-        pass
 
 
 def main():

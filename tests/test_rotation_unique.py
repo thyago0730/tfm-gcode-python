@@ -8,7 +8,7 @@ import sys, os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src', 'app'))
 
-from TFM_GCODE import GCodeGenerator
+from gcode_generator import GCodeGenerator
 
 def test_rotation_unique():
     gen = GCodeGenerator()

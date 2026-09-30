@@ -6,7 +6,7 @@ import os
 # Garantir import do app a partir da raiz do projeto
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'app'))
 
-from TFM_GCODE import GCodeGenerator
+from gcode_generator import GCodeGenerator
 
 def test_spindle_mode():
     generator = GCodeGenerator()

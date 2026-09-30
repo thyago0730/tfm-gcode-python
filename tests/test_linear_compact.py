@@ -6,9 +6,9 @@ import sys, os
 PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, os.path.join(PROJECT_ROOT, 'src', 'app'))
 
-from TFM_GCODE import GCodeGenerator
+from gcode_generator import GCodeGenerator
 
-def test_linear_compact_modes():
+def _run_linear_compact_modes():
     """Test both compact and non-compact modes for linear oscillation"""
     
     # Create generator instance
@@ -104,8 +104,8 @@ def test_linear_compact_modes():
     print(f"Non-compact mode: {non_compact_dwell_count} dwell commands, {non_compact_g01_count} motion commands")
     
     # Success criteria
-    success = (compact_dwell_count == 0 and 
-              non_compact_dwell_count > 0 and
+    # G04 foi removido do gerador (rampas S-curve no lugar)
+    success = (compact_dwell_count == 0 and
               compact_g01_count < non_compact_g01_count)
     
     return success
@@ -120,3 +120,7 @@ if __name__ == "__main__":
     else:
         print("❌ Test FAILED: Linear compact mode needs adjustment")
     sys.exit(0 if success else 1)
+
+
+def test_linear_compact_modes():
+    assert _run_linear_compact_modes()

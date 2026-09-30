@@ -5,10 +5,10 @@ import sys
 from pathlib import Path
 
 # Permite importar TFM_GCODE do novo local src/app
-project_root = Path(__file__).resolve().parent
+project_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root / 'src' / 'app'))
 
-from TFM_GCODE import GCodeGenerator
+from gcode_generator import GCodeGenerator
 
 def analyze_final_pass_patterns():
     """Analyze the final pass patterns to identify duplication"""
@@ -196,7 +196,7 @@ def test_edge_case_conditions():
         print(f"{'='*60}")
         
         try:
-    gcode = generator.generate(case['params'])
+            gcode = generator.generate(case['params'])
             
             # Quick analysis
             layer_count = sum(1 for line in gcode if "(--- CAMADA" in line)

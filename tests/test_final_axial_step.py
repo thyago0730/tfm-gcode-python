@@ -5,10 +5,10 @@ import sys
 from pathlib import Path
 
 # Permite importar TFM_GCODE do novo local src/app
-project_root = Path(__file__).resolve().parent
+project_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root / 'src' / 'app'))
 
-from TFM_GCODE import GCodeGenerator
+from gcode_generator import GCodeGenerator
 
 def analyze_final_axial_step():
     """Analyze the final axial step for potential duplication issues"""

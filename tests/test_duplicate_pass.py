@@ -5,10 +5,10 @@ import sys
 from pathlib import Path
 
 # Permite importar TFM_GCODE do novo local src/app
-project_root = Path(__file__).resolve().parent
+project_root = Path(__file__).resolve().parents[1]
 sys.path.append(str(project_root / 'src' / 'app'))
 
-from TFM_GCODE import GCodeGenerator
+from gcode_generator import GCodeGenerator
 
 def test_duplicate_final_pass():
     """Test to identify if the final pass is duplicated"""
@@ -40,7 +40,7 @@ def test_duplicate_final_pass():
     gcode = generator.generate(test_params)
     
     # Save G-code to file for analysis
-    with open('test_output.gcode', 'w') as f:
+    with open(project_root / 'tests' / 'analysis' / 'test_output.gcode', 'w') as f:
         for line in gcode:
             f.write(line + '\n')
     
