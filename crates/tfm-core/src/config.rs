@@ -357,8 +357,9 @@ impl Default for UiPrefs {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Database {
-    /// Pasta dos procedimentos salvos; relativa à pasta do `config.json`
-    /// quando não é absoluta (ver [`AppConfig::procedures_dir`]).
+    /// Pasta dos procedimentos salvos; relativa à raiz do app
+    /// ([`AppConfig::app_root`]) quando não é absoluta (ver
+    /// [`AppConfig::procedures_dir`]).
     #[serde(deserialize_with = "lenient_string")]
     pub procedures_path: String,
 }
@@ -478,19 +479,20 @@ impl AppConfig {
         if cfg!(debug_assertions) {
             return workspace_root().join(DIR_NAME).join(FILE_NAME);
         }
-        let exe_dir = std::env::current_exe()
-            .ok()
-            .and_then(|exe| exe.parent().map(Path::to_path_buf));
-        let Some(exe_dir) = exe_dir else {
-            return PathBuf::from(DIR_NAME).join(FILE_NAME);
-        };
-        let first = exe_dir.join(DIR_NAME).join(FILE_NAME);
-        let mut candidates = vec![first.clone(), exe_dir.join(FILE_NAME)];
-        if let Some(parent) = exe_dir.parent() {
-            candidates.push(parent.join(DIR_NAME).join(FILE_NAME));
-            candidates.push(parent.join(FILE_NAME));
+        release_layout().1
+    }
+
+    /// Raiz do aplicativo, base dos caminhos relativos da configuração
+    /// (`database.procedures_path` e as pastas de dados/logs que a UI usar):
+    /// a mesma base de [`resolve_path`](Self::resolve_path). Em
+    /// desenvolvimento é a raiz do workspace; em release, a pasta do
+    /// executável (ou a pasta pai, quando o `config.json` foi encontrado lá).
+    /// Equivale ao `root_dir` do Python (`sys.executable` ou raiz do projeto).
+    pub fn app_root() -> PathBuf {
+        if cfg!(debug_assertions) {
+            return workspace_root();
         }
-        candidates.into_iter().find(|c| c.exists()).unwrap_or(first)
+        release_layout().0
     }
 
     /// Lê `path` e mescla sobre os defaults **sem** regravar o arquivo.
@@ -517,23 +519,21 @@ impl AppConfig {
     /// procedimentos ([`procedures_dir`](Self::procedures_dir)); não
     /// conseguir criar essa pasta não falha o save.
     pub fn save(&self, path: &Path) -> io::Result<()> {
-        let _ = fs::create_dir_all(self.procedures_dir(path));
+        let _ = fs::create_dir_all(self.procedures_dir());
         write_json_pretty4(path, self)
     }
 
-    /// Pasta dos procedimentos: `database.procedures_path` absoluta, ou
-    /// relativa à pasta que contém `config_path`.
-    pub fn procedures_dir(&self, config_path: &Path) -> PathBuf {
+    /// Pasta dos procedimentos: `database.procedures_path` absoluta como está,
+    /// ou relativa à [`app_root`](Self::app_root) (`root_dir / proc_path` no
+    /// Python). Com o `config.json` do usuário (`"procedures"`) é
+    /// `<raiz do app>/procedures`.
+    pub fn procedures_dir(&self) -> PathBuf {
         let p = Path::new(&self.database.procedures_path);
         if p.is_absolute() {
-            return p.to_path_buf();
+            p.to_path_buf()
+        } else {
+            Self::app_root().join(p)
         }
-        let base = config_path
-            .parent()
-            .filter(|d| !d.as_os_str().is_empty())
-            .map(Path::to_path_buf)
-            .unwrap_or_else(|| PathBuf::from("."));
-        base.join(p)
     }
 
     /// Perfil de máquina ativo (`machine_profiles[active_machine_profile]`).
@@ -612,8 +612,32 @@ fn map_from_value<T: DeserializeOwned>(v: Value) -> Option<IndexMap<String, T>> 
     )
 }
 
+/// Layout de release: `(raiz do app, caminho do config.json)`. Candidatos na
+/// ordem do Python congelado — `exe/config/config.json`, `exe/config.json`,
+/// `pai/config/config.json`, `pai/config.json` —, cada um com a sua raiz; se
+/// nenhum existe, a pasta do executável com `config/config.json`.
+fn release_layout() -> (PathBuf, PathBuf) {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|exe| exe.parent().map(Path::to_path_buf))
+        .unwrap_or_else(|| PathBuf::from("."));
+    let default_config = exe_dir.join(DIR_NAME).join(FILE_NAME);
+    let mut candidates = vec![
+        (exe_dir.clone(), default_config.clone()),
+        (exe_dir.clone(), exe_dir.join(FILE_NAME)),
+    ];
+    if let Some(parent) = exe_dir.parent().filter(|p| !p.as_os_str().is_empty()) {
+        candidates.push((parent.to_path_buf(), parent.join(DIR_NAME).join(FILE_NAME)));
+        candidates.push((parent.to_path_buf(), parent.join(FILE_NAME)));
+    }
+    candidates
+        .into_iter()
+        .find(|(_, path)| path.exists())
+        .unwrap_or((exe_dir, default_config))
+}
+
 /// Raiz do workspace Cargo (`CARGO_MANIFEST_DIR/../..`), canonicalizada e
-/// sem o prefixo verbatim `\?\` do Windows.
+/// sem o prefixo verbatim `\\?\` do Windows.
 fn workspace_root() -> PathBuf {
     let raw = Path::new(env!("CARGO_MANIFEST_DIR")).join("..").join("..");
     match raw.canonicalize() {
@@ -624,10 +648,10 @@ fn workspace_root() -> PathBuf {
 
 fn strip_verbatim_prefix(p: PathBuf) -> PathBuf {
     let s = p.to_string_lossy();
-    if let Some(rest) = s.strip_prefix(r"\?\UNC\") {
-        return PathBuf::from(format!(r"\{rest}"));
+    if let Some(rest) = s.strip_prefix(r"\\?\UNC\") {
+        return PathBuf::from(format!(r"\\{rest}"));
     }
-    if let Some(rest) = s.strip_prefix(r"\?\") {
+    if let Some(rest) = s.strip_prefix(r"\\?\") {
         return PathBuf::from(rest);
     }
     p

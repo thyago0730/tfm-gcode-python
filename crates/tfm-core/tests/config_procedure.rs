@@ -11,7 +11,7 @@ use std::path::Path;
 use chrono::{Local, NaiveDate};
 use serde_json::{json, Value};
 use tfm_core::audit::{AuditLogger, SOFTWARE_VERSION};
-use tfm_core::config::{AppConfig, Formulas, MachineLimits};
+use tfm_core::config::{AppConfig, Database, Formulas, MachineLimits};
 use tfm_core::params::{
     BolachaTipo, Direction, Operation, OscillationType, Params, Rotation, WeldingMode,
 };
@@ -123,8 +123,10 @@ fn config_missing_file_saves_full_structure() {
         "indent 4 como json.dump(indent=4):\n{text}"
     );
     assert!(!text.ends_with('\n'), "json.dump não escreve newline final");
-    // o Python garante a pasta de procedimentos ao salvar
-    assert!(dir.path().join("sub").join("procedures").is_dir());
+    // o Python garante a pasta de procedimentos ao salvar: relativa à raiz do
+    // app (`root_dir / proc_path`), não à pasta do config.json
+    assert!(!dir.path().join("sub").join("procedures").exists());
+    assert!(cfg.procedures_dir().is_dir(), "{}", cfg.procedures_dir().display());
 }
 
 #[test]
@@ -202,8 +204,43 @@ fn config_resolve_path_in_debug_points_to_workspace_config() {
     if cfg!(debug_assertions) {
         assert!(path.is_absolute());
         assert!(path.exists(), "{} deve ser o config/config.json do repositório", path.display());
-        assert!(!path.to_string_lossy().starts_with(r"\?\"), "sem prefixo verbatim: {}", path.display());
+        assert!(!path.to_string_lossy().starts_with(r"\\?\"), "sem prefixo verbatim: {}", path.display());
+        // mesma coisa que canonicalize() devolve, só sem o prefixo verbatim
+        let canon = path.canonicalize().unwrap().to_string_lossy().into_owned();
+        assert_eq!(canon.trim_start_matches(r"\\?\"), path.to_string_lossy());
     }
+}
+
+#[test]
+fn procedures_dir_is_relative_to_app_root() {
+    // Python: `root_dir / proc_path`, com root_dir = pasta do exe (congelado)
+    // ou raiz do projeto (dev) — nunca a pasta que contém o config.json.
+    let root = AppConfig::app_root();
+    assert!(root.is_absolute(), "{}", root.display());
+    assert_eq!(root.join("config").join("config.json"), AppConfig::resolve_path());
+
+    // "procedures", como no config.json real do usuário
+    let cfg = AppConfig::default();
+    assert_eq!(cfg.database.procedures_path, "procedures");
+    let dir = cfg.procedures_dir();
+    assert!(dir.ends_with("procedures"), "{}", dir.display());
+    assert_eq!(dir.parent().unwrap(), root);
+    assert_ne!(
+        dir.parent().and_then(Path::file_name).unwrap(),
+        "config",
+        "não deve cair em <raiz>/config/procedures: {}",
+        dir.display()
+    );
+
+    // caminho absoluto fica como está
+    let abs = std::env::temp_dir().join("tfm_procedimentos_abs");
+    let cfg_abs = AppConfig {
+        database: Database {
+            procedures_path: abs.to_string_lossy().into_owned(),
+        },
+        ..AppConfig::default()
+    };
+    assert_eq!(cfg_abs.procedures_dir(), abs);
 }
 
 #[test]
