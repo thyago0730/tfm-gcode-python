@@ -17,6 +17,10 @@ tests/analysis/*
 # Build/Dist
 build/
 dist/
+build_installer/
+build_onedir/
+dist_installer/
+out/
 scripts/build/
 scripts/dist/
 
@@ -32,3 +36,5 @@ Thumbs.db
 # Ambiente
 .env
 
+# Rust
+target/
