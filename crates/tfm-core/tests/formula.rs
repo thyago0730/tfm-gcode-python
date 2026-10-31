@@ -360,6 +360,41 @@ fn lexer_rejects_garbage() {
     assert!(matches!(parse(&deep), Err(FormulaError::Parse(_))));
     let minus = format!("{}1", "-".repeat(100_000));
     assert!(matches!(parse(&minus), Err(FormulaError::Parse(_))));
+    // Cadeias associativas à esquerda não recursam no parser, mas a árvore
+    // cresce um nível por termo (eval e Drop são recursivos nela): também
+    // precisam ser rejeitadas, e rápido.
+    let chain = format!("{}1", "1+".repeat(100_000));
+    assert!(matches!(parse(&chain), Err(FormulaError::Parse(_))));
+    let products = format!("{}1", "2*".repeat(100_000));
+    assert!(matches!(parse(&products), Err(FormulaError::Parse(_))));
+    let powers = format!("{}1", "2**".repeat(100_000));
+    assert!(matches!(parse(&powers), Err(FormulaError::Parse(_))));
+}
+
+#[test]
+fn tree_height_limit_is_256() {
+    // 256 termos -> altura 256: aceito, avaliado e descartado sem problema.
+    let max_ok = format!("{}1", "1+".repeat(255));
+    assert_eq!(ok(&max_ok), 256.0);
+    // 257 termos -> altura 257: rejeitado com mensagem que cita o limite.
+    let too_deep = format!("{}1", "1+".repeat(256));
+    match parse(&too_deep) {
+        Err(FormulaError::Parse(msg)) => assert!(msg.contains("256"), "{msg}"),
+        other => panic!("esperado FormulaError::Parse, obtido {other:?}"),
+    }
+    // Chamadas e unários aninhados contam níveis do mesmo jeito.
+    let calls_ok = format!("{}1{}", "abs(".repeat(200), ")".repeat(200));
+    assert_eq!(ok(&calls_ok), 1.0);
+    let calls_too_deep = format!("{}1{}", "max(".repeat(300), ")".repeat(300));
+    assert!(matches!(
+        parse(&calls_too_deep),
+        Err(FormulaError::Parse(_))
+    ));
+    let unary_ok = format!("{}1", "-".repeat(200));
+    assert_eq!(ok(&unary_ok), 1.0);
+    // Altura é a do ramo mais profundo: muitos argumentos rasos não contam.
+    let wide = format!("max({})", vec!["1"; 5_000].join(", "));
+    assert_eq!(ok(&wide), 1.0);
 }
 
 #[test]
