@@ -1,7 +1,9 @@
 //! Testes de integração de `tfm_core::{config, procedure, audit, quality}`.
 //!
-//! Tudo roda em diretórios temporários (`tempfile`): o `config/config.json`
-//! do repositório e `data/quality/*` são apenas lidos, nunca gravados.
+//! Tudo roda em diretórios temporários (`tempfile`). O `config/config.json`
+//! do repositório é apenas lido, nunca gravado, e só recebe asserções
+//! estruturais; os arquivos de qualidade são fixtures próprias (nada em
+//! `data/` é lido).
 //! Os valores esperados vêm do Python original (`config_manager.py`,
 //! `quality_manager.py`, `TFM_GCODE.py`).
 
@@ -138,22 +140,28 @@ fn repo_config_json_round_trips() {
 
     let cfg = AppConfig::load(&path);
 
+    // Só asserções estruturais: o conteúdo é do usuário e muda pelo app.
     assert_eq!(cfg.formulas.expressions.len(), 20);
     assert_eq!(cfg.powders.len(), 9);
-    assert_eq!(cfg.active_powder, "Stellite 6");
-    assert_eq!(cfg.powder("Stellite 6").unwrap().cost_brl_kg, 450.0);
-    assert!(cfg.powder("inexistente").is_none());
-    assert_eq!(cfg.costs.powder_brl_kg, 700.0);
-    assert_eq!(cfg.costs.machine_brl_hour, 250.0);
-    assert_eq!(cfg.costs.extra["po_metalico_eur_kg"], json!(50.0), "chaves EUR extras preservadas");
-    assert_eq!(cfg.ui.extra["sashes"]["main"]["x"], json!(361), "ui.sashes do Python preservado");
-    assert_eq!(cfg.ui.compact_threshold_px, 560);
-    assert_eq!(cfg.database.procedures_path, "procedures");
-    assert_eq!(cfg.integration.mach3_path, "C:/Mach3/Mach3.exe");
-    assert!(cfg.formulas.notes.contains("overlap_model"), "notes do usuário vencem o default");
 
-    // O arquivo regravado mantém todas as chaves e valores do usuário.
+    // O arquivo regravado tem as nove seções e mantém todas as chaves e
+    // valores do usuário (inclusive extras de `costs` e `ui.sashes`).
     let saved = read_json(&path);
+    let saved_keys: Vec<&str> = saved.as_object().unwrap().keys().map(String::as_str).collect();
+    assert_eq!(
+        saved_keys,
+        [
+            "ui",
+            "costs",
+            "powders",
+            "active_powder",
+            "formulas",
+            "database",
+            "integration",
+            "machine_profiles",
+            "active_machine_profile",
+        ]
+    );
     let orig: Value = serde_json::from_str(&original).unwrap();
     for (key, value) in orig.as_object().unwrap() {
         if key == "ui" {
@@ -715,17 +723,40 @@ fn process_warnings_match_python_validate_parameters() {
 }
 
 #[test]
-fn repo_quality_files_load() {
-    // Cópias dos arquivos reais de data/quality (somente leitura no repositório).
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../data/quality");
+fn python_shaped_quality_files_load() {
+    // Mesmo formato dos arquivos que o Python grava em data/quality
+    // (operators.json com as duas chaves de validade; wps.json só com
+    // name/params), com valores sintéticos para não depender dos dados do usuário.
     let dir = tempfile::tempdir().unwrap();
     let qm = quality(
         dir.path(),
-        Some(&fs::read_to_string(repo.join("operators.json")).unwrap()),
-        Some(&fs::read_to_string(repo.join("wps.json")).unwrap()),
+        Some(
+            r#"[
+    {
+        "name": "Operador Exemplo",
+        "qualification_id": "QX-001",
+        "qualification_validity": "2099-06-30",
+        "validity": "2099-06-30"
+    }
+]"#,
+        ),
+        Some(
+            r#"[
+    {
+        "name": "EPS-Exemplo",
+        "params": {}
+    }
+]"#,
+        ),
     );
-    assert_eq!(qm.operator_names(), ["Thiago"]);
-    assert_eq!(qm.operator("Thiago").unwrap().qualification_validity, "2026-01-26");
-    assert_eq!(qm.wps_names(), ["teste"]);
-    assert!(qm.wps("teste").unwrap().limits.is_empty());
+    assert_eq!(qm.operator_names(), ["Operador Exemplo"]);
+    let op = qm.operator("Operador Exemplo").unwrap();
+    assert_eq!(op.qualification_id, "QX-001");
+    assert_eq!(op.qualification_validity, "2099-06-30");
+    assert_eq!(op.code, "");
+    assert_eq!(qm.check_operator_qualification("Operador Exemplo"), Ok(()));
+    assert_eq!(qm.wps_names(), ["EPS-Exemplo"]);
+    let wps = qm.wps("EPS-Exemplo").unwrap();
+    assert!(wps.params.is_empty());
+    assert!(wps.limits.is_empty());
 }

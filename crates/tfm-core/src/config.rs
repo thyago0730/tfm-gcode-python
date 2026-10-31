@@ -11,7 +11,9 @@
 //!   pasta de procedimentos (`database.procedures_path`);
 //! * objetos JSON são [`IndexMap`] e as seções `ui` e `costs` guardam as
 //!   chaves desconhecidas em `extra`, para que regravar o arquivo do usuário
-//!   não perca nada nem mude a ordem das chaves.
+//!   não perca nada; os campos tipados saem primeiro e as extras depois, e em
+//!   `formulas.expressions` as chaves conhecidas seguem a ordem do default
+//!   após o merge (como no Python).
 //!
 //! Números e booleanos são lidos de forma leniente (ver `params::lenient_*`),
 //! porque o arquivo pode ter sido editado à mão.
