@@ -1,0 +1,236 @@
+%
+(G-CODE GERADO PELO TFM G-CODE)
+(Data: 01/01/2000 00:00:00)
+( SOFTWARE: TFM GCODE v11.3.2 )
+(----------------------------------------)
+( PROCEDIMENTO: Novo Procedimento )
+( MODO DE SOLDAGEM: ESPIRAL_MULTIPERFIL )
+( DIAMETRO: 50.000 mm )
+( COMPRIMENTO: 50.000 mm )
+( SOBREPOSICAO: 40.0% )
+( VELOCIDADE DEP.: 120.0 mm/min )
+( SENTIDO: esquerda_direita )
+( SENTIDO ROTACAO: HORARIA )
+( CAMADAS: 2 de 1.50mm )
+( RESPOSTA TOCHA: LIGAR 3.00s / DESLIGAR 2.00s )
+( PERFIS: 4 )
+( SETOR TOTAL: 360.00 deg )
+( PASSO POR PERFIL: 12.000 mm )
+( ESTRATEGIA: Passes separados )
+( PONTO A PONTO: SIM )
+( FORMATO PERFIL: Retangular )
+( ALTURA PERFIL: 3.000 mm )
+( LARGURA BASE: 8.000 mm )
+( LARGURA TOPO: 4.000 mm )
+( LEAD-IN: 0.00 mm, LEAD-OUT: 0.00 mm )
+(----------------------------------------)
+G21 G90 G94
+
+(PREPARO DA TOCHA)
+G53 G0 Z0 Y0 (Ir ao Z&Y=0 maquina)
+G90 G0 Y0 (Ir ao Y=0 peca)
+
+(--- CAMADA 1 / MULTIPERFIL ---)
+G00 Z42.000
+(PERFIL 1/4 - ANGULO INICIAL 0.000 deg)
+(FORMACAO DO PERFIL: Retangular / 2 PASSADAS / 8.000 mm)
+(  SUBPASSE 1/2 - OFFSET X -2.406 mm )
+G00 X0.000 A287.598
+G00 Z12.000
+M0 (Confirme e pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F274.2 X50.000 A1787.598
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F274.2 X50.305 A1796.739
+G00 Z42.000
+(  SUBPASSE 2/2 - OFFSET X +2.406 mm )
+G00 X0.000 A1872.402
+G00 Z12.000
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F274.2 X50.000 A3372.402
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F274.2 X50.305 A3381.543
+G00 Z42.000
+(PERFIL 2/4 - ANGULO INICIAL 90.000 deg)
+(FORMACAO DO PERFIL: Retangular / 2 PASSADAS / 8.000 mm)
+(  SUBPASSE 1/2 - OFFSET X -2.406 mm )
+G00 X0.000 A3617.598
+G00 Z12.000
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F274.2 X50.000 A5117.598
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F274.2 X50.305 A5126.739
+G00 Z42.000
+(  SUBPASSE 2/2 - OFFSET X +2.406 mm )
+G00 X0.000 A5202.402
+G00 Z12.000
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F274.2 X50.000 A6702.402
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F274.2 X50.305 A6711.543
+G00 Z42.000
+(PERFIL 3/4 - ANGULO INICIAL 180.000 deg)
+(FORMACAO DO PERFIL: Retangular / 2 PASSADAS / 8.000 mm)
+(  SUBPASSE 1/2 - OFFSET X -2.406 mm )
+G00 X0.000 A6947.598
+G00 Z12.000
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F274.2 X50.000 A8447.598
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F274.2 X50.305 A8456.739
+G00 Z42.000
+(  SUBPASSE 2/2 - OFFSET X +2.406 mm )
+G00 X0.000 A8532.402
+G00 Z12.000
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F274.2 X50.000 A10032.402
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F274.2 X50.305 A10041.543
+G00 Z42.000
+(PERFIL 4/4 - ANGULO INICIAL 270.000 deg)
+(FORMACAO DO PERFIL: Retangular / 2 PASSADAS / 8.000 mm)
+(  SUBPASSE 1/2 - OFFSET X -2.406 mm )
+G00 X0.000 A10277.598
+G00 Z12.000
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F274.2 X50.000 A11777.598
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F274.2 X50.305 A11786.739
+G00 Z42.000
+(  SUBPASSE 2/2 - OFFSET X +2.406 mm )
+G00 X0.000 A11862.402
+G00 Z12.000
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F274.2 X50.000 A13362.402
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F274.2 X50.305 A13371.543
+G00 Z42.000
+(--- CAMADA 2 / MULTIPERFIL ---)
+G00 Z43.500
+(PERFIL 1/4 - ANGULO INICIAL 0.000 deg)
+(FORMACAO DO PERFIL: Retangular / 2 PASSADAS / 8.000 mm)
+(  SUBPASSE 1/2 - OFFSET X -2.405 mm )
+G00 X0.000 A287.656
+G00 Z13.500
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F258.8 X50.000 A1787.656
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F258.8 X50.288 A1796.282
+G00 Z43.500
+(  SUBPASSE 2/2 - OFFSET X +2.405 mm )
+G00 X0.000 A1872.344
+G00 Z13.500
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F258.8 X50.000 A3372.344
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F258.8 X50.288 A3380.970
+G00 Z43.500
+(PERFIL 2/4 - ANGULO INICIAL 90.000 deg)
+(FORMACAO DO PERFIL: Retangular / 2 PASSADAS / 8.000 mm)
+(  SUBPASSE 1/2 - OFFSET X -2.405 mm )
+G00 X0.000 A3617.656
+G00 Z13.500
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F258.8 X50.000 A5117.656
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F258.8 X50.288 A5126.282
+G00 Z43.500
+(  SUBPASSE 2/2 - OFFSET X +2.405 mm )
+G00 X0.000 A5202.344
+G00 Z13.500
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F258.8 X50.000 A6702.344
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F258.8 X50.288 A6710.970
+G00 Z43.500
+(PERFIL 3/4 - ANGULO INICIAL 180.000 deg)
+(FORMACAO DO PERFIL: Retangular / 2 PASSADAS / 8.000 mm)
+(  SUBPASSE 1/2 - OFFSET X -2.405 mm )
+G00 X0.000 A6947.656
+G00 Z13.500
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F258.8 X50.000 A8447.656
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F258.8 X50.288 A8456.282
+G00 Z43.500
+(  SUBPASSE 2/2 - OFFSET X +2.405 mm )
+G00 X0.000 A8532.344
+G00 Z13.500
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F258.8 X50.000 A10032.344
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F258.8 X50.288 A10040.970
+G00 Z43.500
+(PERFIL 4/4 - ANGULO INICIAL 270.000 deg)
+(FORMACAO DO PERFIL: Retangular / 2 PASSADAS / 8.000 mm)
+(  SUBPASSE 1/2 - OFFSET X -2.405 mm )
+G00 X0.000 A10277.656
+G00 Z13.500
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F258.8 X50.000 A11777.656
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F258.8 X50.288 A11786.282
+G00 Z43.500
+(  SUBPASSE 2/2 - OFFSET X +2.405 mm )
+G00 X0.000 A11862.344
+G00 Z13.500
+M0 (Ponto a ponto: posicionado no proximo cordao. Pressione Start)
+M101 (LIGAR Output#1 - tocha)
+G04 P3.00 (Aguardar abertura da tocha)
+G01 F258.8 X50.000 A13362.344
+M102 (DESLIGAR Output#1 - tocha)
+(APAGAMENTO DA TOCHA: manter cordao por 2.00s)
+G01 F258.8 X50.288 A13370.970
+G00 Z43.500
+
+M102 (DESLIGAR Output#1 - tocha)
+(RETORNO AO ZERO MAQUINA)
+G90
+G53 G0 Z0 Y0 (Ir ao Z&Y=0 maquina)
+G53 G0 X0 (Ir ao X=0 maquina)
+M30 (FIM DO PROGRAMA)
+%
