@@ -172,3 +172,45 @@ fn golden_osc_quad_continua() {
 fn golden_legado() {
     run_golden("legado_");
 }
+
+/// Desempenho da quadrada contínua num programa longo: o caso `osc_quad_continua`
+/// esticado para 100 mm, 3 camadas e granularidade fina (0.1 mm em X, 0.5° em A),
+/// o que dá 50 passos axiais × 99-110 passos angulares × 2 pernas × 50 subpassos
+/// por camada: ~3.1 milhões de linhas.
+///
+/// Limite: 2 s em release, 4 s em debug. Medido num i5-10400F: release 0.60 s
+/// (300 mm / 9.4 milhões de linhas: 1.8 s), debug 1.85 s — em debug o custo é
+/// dominado pela alocação de cada `String` e pelo `Vec::push` não otimizado,
+/// que uma regressão algorítmica ou a volta ao `format!("{:.3}")` do std
+/// (~1.4 µs por linha, 3-4x o caminho atual) ainda estoura com folga.
+#[test]
+fn square_continuous_long_program_under_2s() {
+    let limit = std::time::Duration::from_secs(if cfg!(debug_assertions) { 4 } else { 2 });
+    let case = load_cases()
+        .into_iter()
+        .find(|c| c.name == "osc_quad_continua")
+        .expect("caso osc_quad_continua presente em cases.json");
+    let mut p: Params =
+        serde_json::from_value(case.params).expect("parâmetros de osc_quad_continua válidos");
+    p.comprimento_revestir = 100.0;
+    p.num_camadas = 3;
+    p.osc_test_gran_x = 0.1;
+    p.osc_test_gran_a = 0.5;
+
+    let start = std::time::Instant::now();
+    let lines = generate_with_timestamp(&p, TIMESTAMP).expect("geração da quadrada contínua");
+    let elapsed = start.elapsed();
+    // Visível com `--nocapture`, para acompanhar a margem em outras máquinas.
+    eprintln!("quadrada contínua longa: {} linhas em {elapsed:?}", lines.len());
+
+    assert!(
+        lines.len() > 10_000,
+        "programa curto demais para medir: {} linhas",
+        lines.len()
+    );
+    assert!(
+        elapsed < limit,
+        "geração de {} linhas levou {elapsed:?} (limite {limit:?})",
+        lines.len()
+    );
+}
