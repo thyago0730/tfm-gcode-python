@@ -35,6 +35,13 @@ pub fn generate(p: &Params) -> Result<Vec<String>, GenError> {
 
 /// Gera o G-code com um timestamp fixo (usado pelas fixtures golden).
 pub fn generate_with_timestamp(p: &Params, timestamp: &str) -> Result<Vec<String>, GenError> {
+    // Parâmetros degenerados (largura 0, sobreposição 100%, passo 0, oscilação 0)
+    // levam vários geradores a laços de dezenas de milhões de passes; a validação
+    // física barra antes, como `_generate_gcode_clicked` faz no Python.
+    let errors = crate::validator::validate_physical(p).errors;
+    if !errors.is_empty() {
+        return Err(GenError::Invalid(errors.join("\n")));
+    }
     let mut p = p.clone();
     p.normalize();
     match p.welding_mode {
