@@ -56,6 +56,9 @@ const WHEEL_ZOOM: f32 = 0.0025;
 const PICK_RADIUS: f32 = 10.0;
 /// Segmentos de reta por círculo da silhueta.
 const CIRCLE_SEGMENTS: usize = 48;
+/// Quanto a linha de centro do eixo A passa de cada face do cilindro, como
+/// fração do comprimento.
+const AXIS_OVERHANG: f32 = 0.1;
 
 /// Marcador guardado pelo `TfmApp`; o estado real é [`ViewState`], na memória
 /// do egui (ver [`with_state`]).
@@ -956,7 +959,9 @@ fn toolbar(ui: &mut Ui, state: &mut ViewState, total: usize) {
     });
 }
 
-/// Grade do chão (plano XY logo abaixo da peça) e o triedro XYZ no canto.
+/// Grade do chão (plano XY logo abaixo da peça) e o triedro XYZ na origem da
+/// máquina: nas peças que giram é o centro do eixo A (X0 na linha de centro);
+/// na chapa plana, o canto X0 Y0 na altura zero.
 fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, palette: &Palette) {
     let extent = b.extent();
     let spacing = nice_step(extent / 8.0);
@@ -980,7 +985,7 @@ fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, palette: &Palette)
         }
     }
 
-    let origin = Vec3::new(cx - half, cy - half, z);
+    let origin = Vec3::default();
     let len = spacing * 2.0;
     let axes = [
         (Vec3::new(len, 0.0, 0.0), palette.danger, "X"),
@@ -1003,8 +1008,9 @@ fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, palette: &Palette)
     }
 }
 
-/// Silhueta da peça em cinza fino: cilindro (dois círculos + 4 geratrizes),
-/// chapa (retângulo na altura da tocha) ou bolacha (anéis interno/externo).
+/// Silhueta da peça em cinza fino: cilindro (dois círculos, 4 geratrizes e a
+/// linha de centro do eixo A passando [`AXIS_OVERHANG`] das faces), chapa
+/// (retângulo na altura da tocha) ou bolacha (anéis interno/externo).
 /// `rotation` é o ângulo A atual da peça: as geratrizes do cilindro giram
 /// com ela (ver [`rotate_part`]); chapa e bolacha ignoram o valor.
 fn draw_reference(
@@ -1074,6 +1080,12 @@ fn draw_reference(
                     rotate_part(Vec3::new(x1, r * c, r * s), rotation),
                 );
             }
+            // Linha de centro do eixo A: é em torno dela que a peça gira.
+            let over = (x1 - x0) * AXIS_OVERHANG;
+            line(
+                Vec3::new(x0 - over, 0.0, 0.0),
+                Vec3::new(x1 + over, 0.0, 0.0),
+            );
         }
     }
 }
@@ -1769,6 +1781,98 @@ mod tests {
             Shape::Text(t) => texts.push(t.galley.text().to_owned()),
             _ => {}
         }
+    }
+
+    /// Recolhe segmentos de reta (pontos, cor do traço) pintados num quadro.
+    fn collect_segments(shape: &Shape, out: &mut Vec<([Pos2; 2], [u8; 4])>) {
+        match shape {
+            Shape::Vec(v) => v.iter().for_each(|s| collect_segments(s, out)),
+            Shape::LineSegment { points, stroke } => {
+                out.push((*points, stroke.color.to_array()));
+            }
+            _ => {}
+        }
+    }
+
+    /// Espiral padrão com a câmera enquadrada na cena.
+    fn spiral_scene() -> (Params, Toolpath, Camera, Rect) {
+        let params = Params::default();
+        let lines = tfm_core::gcode::generate(&params).unwrap_or_else(|e| panic!("{e}"));
+        let tp = tfm_core::toolpath::build_toolpath(&lines, &params);
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let bounds = scene_bounds(Some(&tp), Some(&params));
+        let mut cam = Camera::default();
+        cam.fit(bounds.min, bounds.max);
+        (params, tp, cam, rect)
+    }
+
+    /// O triedro XYZ nasce na origem da máquina: nas peças que giram, o
+    /// centro do eixo A, e não o canto da grade.
+    #[test]
+    fn axes_originate_at_machine_origin() {
+        let (params, tp, cam, rect) = spiral_scene();
+        let palette = Palette::light();
+        let bounds = scene_bounds(Some(&tp), Some(&params));
+        let proj = Projector::new(&cam, rect);
+        let origin = proj
+            .project(Vec3::default())
+            .unwrap_or_else(|| panic!("a origem deveria estar visível"));
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            draw_grid(&painter, &proj, &bounds, &palette);
+        });
+        output.textures_delta.clear();
+        let mut segments = Vec::new();
+        for clipped in &output.shapes {
+            collect_segments(&clipped.shape, &mut segments);
+        }
+        for (axis, color) in [
+            ("X", palette.danger),
+            ("Y", palette.success),
+            ("Z", palette.accent),
+        ] {
+            let c = color.to_array();
+            let found = segments
+                .iter()
+                .any(|(pts, col)| *col == c && pts.iter().any(|p| p.distance(origin) < 1.0));
+            assert!(found, "eixo {axis} não parte da origem {origin:?}");
+        }
+    }
+
+    /// A silhueta do cilindro inclui a linha de centro do eixo A, passando um
+    /// pouco das duas faces.
+    #[test]
+    fn cylinder_reference_draws_axis_centerline() {
+        let (params, tp, cam, rect) = spiral_scene();
+        let palette = Palette::light();
+        let proj = Projector::new(&cam, rect);
+        let over = (tp.max.x - tp.min.x) * AXIS_OVERHANG;
+        let a = proj
+            .project(Vec3::new(tp.min.x - over, 0.0, 0.0))
+            .unwrap_or_else(|| panic!("início da linha de centro fora da vista"));
+        let b = proj
+            .project(Vec3::new(tp.max.x + over, 0.0, 0.0))
+            .unwrap_or_else(|| panic!("fim da linha de centro fora da vista"));
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            draw_reference(&painter, &proj, &params, Some(&tp), 0.0, &palette);
+        });
+        output.textures_delta.clear();
+        let mut segments = Vec::new();
+        for clipped in &output.shapes {
+            collect_segments(&clipped.shape, &mut segments);
+        }
+        let found = segments.iter().any(|(pts, _)| {
+            (pts[0].distance(a) < 1.0 && pts[1].distance(b) < 1.0)
+                || (pts[0].distance(b) < 1.0 && pts[1].distance(a) < 1.0)
+        });
+        assert!(
+            found,
+            "linha de centro de {a:?} a {b:?} ausente entre {} segmentos",
+            segments.len()
+        );
     }
 
     /// Só as operações cilíndricas giram a peça; chapa plana e bolacha ficam
