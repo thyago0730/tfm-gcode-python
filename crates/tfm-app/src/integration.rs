@@ -819,14 +819,15 @@ pub fn simulation_view(item: &str) -> Option<ViewPreset> {
     ViewPreset::ALL.into_iter().find(|v| v.hint() == item)
 }
 
-/// Vista das teclas 1–5.
+/// Vista das teclas 1–5 (os mesmos ângulos de sempre; os nomes seguem o
+/// Inventor: Frente é o lado do operador, Esquerda e Direita as pontas).
 pub fn digit_preset(digit: u8) -> Option<ViewPreset> {
     match digit {
         1 => Some(ViewPreset::Iso),
         2 => Some(ViewPreset::Topo),
-        3 => Some(ViewPreset::Lado),
-        4 => Some(ViewPreset::Frente),
-        5 => Some(ViewPreset::Tras),
+        3 => Some(ViewPreset::Frente),
+        4 => Some(ViewPreset::Esquerda),
+        5 => Some(ViewPreset::Direita),
         _ => None,
     }
 }
@@ -1338,15 +1339,15 @@ mod tests {
         assert_eq!(load_procedure(&path).expect("carrega"), p);
     }
 
-    /// Teclas 1–5 = Isométrica, Superior, Lateral, Frontal, Traseira; os
+    /// Teclas 1–5 = Isométrica, Superior, Frontal, Esquerda, Direita; os
     /// itens do menu "Simulação" mapeiam para as mesmas vistas.
     #[test]
     fn digit_presets_are_the_five_views() {
         assert_eq!(digit_preset(1), Some(ViewPreset::Iso));
         assert_eq!(digit_preset(2), Some(ViewPreset::Topo));
-        assert_eq!(digit_preset(3), Some(ViewPreset::Lado));
-        assert_eq!(digit_preset(4), Some(ViewPreset::Frente));
-        assert_eq!(digit_preset(5), Some(ViewPreset::Tras));
+        assert_eq!(digit_preset(3), Some(ViewPreset::Frente));
+        assert_eq!(digit_preset(4), Some(ViewPreset::Esquerda));
+        assert_eq!(digit_preset(5), Some(ViewPreset::Direita));
         assert_eq!(digit_preset(0), None);
         assert_eq!(digit_preset(6), None);
         for v in ViewPreset::ALL {

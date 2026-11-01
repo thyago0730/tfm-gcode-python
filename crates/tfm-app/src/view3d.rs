@@ -5,6 +5,10 @@
 //! aba desenha, nesta ordem, a grade do chão, os eixos XYZ, a silhueta da
 //! peça (cilindro, chapa ou bolacha) e a trajetória colorida por camada.
 //! A simulação ([`Sim`]) desenha o percurso até `progress` e marca a tocha.
+//! No canto superior direito fica o cubo de orientação ([`view_cube`]), como
+//! o ViewCube do Inventor: as faces nomeadas giram com a câmera, clicar numa
+//! face (ou perto de uma aresta ou canto) escolhe a vista, arrastar orbita e
+//! ⌂ volta à isométrica.
 //!
 //! Nas operações cilíndricas (tudo que não é chapa plana nem bolacha) a cena
 //! reproduz a máquina: a tocha fica fixa no topo e anda só em X (e em Z por
@@ -69,33 +73,43 @@ pub struct View3d;
 // Câmera
 // ---------------------------------------------------------------------------
 
-/// Vistas pré-definidas (botões da barra e menu "Simulação").
+/// Vistas pré-definidas (menu "Simulação", teclas 1–5 e faces do cubo de
+/// orientação). Nomes como no Inventor: "Frente" é o lado do operador, com
+/// o eixo X da peça para a direita; "Esquerda" e "Direita" olham pelas
+/// pontas do eixo.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewPreset {
     Iso,
     Topo,
-    Lado,
+    Base,
     Frente,
     Tras,
+    Esquerda,
+    Direita,
 }
 
 impl ViewPreset {
-    pub const ALL: [ViewPreset; 5] = [
+    /// Ordem do menu "Simulação"; as cinco primeiras são as teclas 1–5.
+    pub const ALL: [ViewPreset; 7] = [
         ViewPreset::Iso,
         ViewPreset::Topo,
-        ViewPreset::Lado,
         ViewPreset::Frente,
+        ViewPreset::Esquerda,
+        ViewPreset::Direita,
         ViewPreset::Tras,
+        ViewPreset::Base,
     ];
 
-    /// Rótulo do botão da barra.
+    /// Nome curto.
     pub fn label(self) -> &'static str {
         match self {
             ViewPreset::Iso => "ISO",
             ViewPreset::Topo => "Topo",
-            ViewPreset::Lado => "Lado",
+            ViewPreset::Base => "Base",
             ViewPreset::Frente => "Frente",
             ViewPreset::Tras => "Trás",
+            ViewPreset::Esquerda => "Esquerda",
+            ViewPreset::Direita => "Direita",
         }
     }
 
@@ -104,22 +118,26 @@ impl ViewPreset {
         match self {
             ViewPreset::Iso => "Vista Isométrica",
             ViewPreset::Topo => "Vista Superior",
-            ViewPreset::Lado => "Vista Lateral",
+            ViewPreset::Base => "Vista Inferior",
             ViewPreset::Frente => "Vista Frontal",
             ViewPreset::Tras => "Vista Traseira",
+            ViewPreset::Esquerda => "Vista Esquerda",
+            ViewPreset::Direita => "Vista Direita",
         }
     }
 
     /// `(yaw, pitch)` em graus. Yaw 0 = câmera em -Y olhando para +Y (X
-    /// para a direita, Z para cima); yaw -90° = câmera em -X (vê a face da
-    /// peça); pitch 89° = olhando de cima.
+    /// para a direita, Z para cima): a frente; yaw -90° = câmera em -X,
+    /// olhando a ponta esquerda do eixo; pitch 89° = olhando de cima.
     pub fn angles(self) -> (f32, f32) {
         match self {
             ViewPreset::Iso => (-45.0, 25.0),
             ViewPreset::Topo => (0.0, 89.0),
-            ViewPreset::Lado => (0.0, 0.0),
-            ViewPreset::Frente => (-90.0, 0.0),
-            ViewPreset::Tras => (90.0, 0.0),
+            ViewPreset::Base => (0.0, -89.0),
+            ViewPreset::Frente => (0.0, 0.0),
+            ViewPreset::Tras => (180.0, 0.0),
+            ViewPreset::Esquerda => (-90.0, 0.0),
+            ViewPreset::Direita => (90.0, 0.0),
         }
     }
 }
@@ -161,6 +179,28 @@ impl Camera {
         let (yaw, pitch) = v.angles();
         self.yaw = yaw;
         self.pitch = pitch;
+    }
+
+    /// Põe a câmera na direção `dir` (do alvo para a câmera), mantendo alvo
+    /// e distância: é o que um clique no cubo de orientação pede. Direção
+    /// vertical não define yaw e mantém o atual; zero ou não finita é
+    /// ignorada.
+    pub fn look_from(&mut self, dir: Vec3) {
+        if !is_finite(dir) {
+            return;
+        }
+        let d = normalize(dir);
+        if length(d) < 0.5 {
+            return;
+        }
+        self.pitch =
+            d.z.clamp(-1.0, 1.0)
+                .asin()
+                .to_degrees()
+                .clamp(-PITCH_LIMIT, PITCH_LIMIT);
+        if d.x.abs() > 1e-6 || d.y.abs() > 1e-6 {
+            self.yaw = wrap_deg(d.x.atan2(-d.y).to_degrees());
+        }
     }
 
     fn basis(&self) -> Basis {
@@ -341,6 +381,16 @@ fn dot(a: Vec3, b: Vec3) -> f32 {
     a.x * b.x + a.y * b.y + a.z * b.z
 }
 
+/// Vetor unitário na direção de `a` (zero se `a` for nulo ou não finito).
+fn normalize(a: Vec3) -> Vec3 {
+    let l = length(a);
+    if l.is_finite() && l > 1e-12 {
+        scale(a, 1.0 / l)
+    } else {
+        Vec3::default()
+    }
+}
+
 fn length(a: Vec3) -> f32 {
     dot(a, a).sqrt()
 }
@@ -404,6 +454,252 @@ pub fn speed_label(speed: f32) -> String {
         format!("{}x", speed as i64)
     } else {
         format!("{speed:.1}x").replace('.', ",")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Cubo de orientação
+// ---------------------------------------------------------------------------
+
+/// Lado (px) do quadrado reservado ao cubo de orientação no canto do viewport.
+pub const CUBE_SIZE: f32 = 96.0;
+/// Margem do cubo até as bordas do viewport.
+const CUBE_MARGIN: f32 = 10.0;
+/// A partir desta fração da meia-aresta, o clique numa face "pega" a aresta
+/// ou o canto vizinho e pede a vista diagonal, como no ViewCube do Inventor.
+const CUBE_EDGE_ZONE: f32 = 0.6;
+/// Lado do botão ⌂ (vista isométrica) ao lado do cubo.
+const CUBE_HOME: f32 = 18.0;
+
+/// Uma face do cubo: a normal (também a direção da vista que ela pede), os
+/// dois eixos no plano da face (para achar arestas e cantos), o rótulo e a
+/// vista correspondente (para a dica).
+#[derive(Clone, Copy, Debug)]
+struct CubeFace {
+    normal: Vec3,
+    u: Vec3,
+    v: Vec3,
+    label: &'static str,
+    view: ViewPreset,
+}
+
+/// As seis faces, na convenção da cena (X axial, Z para cima).
+const CUBE_FACES: [CubeFace; 6] = [
+    CubeFace {
+        normal: Vec3::new(0.0, 0.0, 1.0),
+        u: Vec3::new(1.0, 0.0, 0.0),
+        v: Vec3::new(0.0, 1.0, 0.0),
+        label: "TOPO",
+        view: ViewPreset::Topo,
+    },
+    CubeFace {
+        normal: Vec3::new(0.0, 0.0, -1.0),
+        u: Vec3::new(1.0, 0.0, 0.0),
+        v: Vec3::new(0.0, -1.0, 0.0),
+        label: "BASE",
+        view: ViewPreset::Base,
+    },
+    CubeFace {
+        normal: Vec3::new(0.0, -1.0, 0.0),
+        u: Vec3::new(1.0, 0.0, 0.0),
+        v: Vec3::new(0.0, 0.0, 1.0),
+        label: "FRENTE",
+        view: ViewPreset::Frente,
+    },
+    CubeFace {
+        normal: Vec3::new(0.0, 1.0, 0.0),
+        u: Vec3::new(-1.0, 0.0, 0.0),
+        v: Vec3::new(0.0, 0.0, 1.0),
+        label: "TRÁS",
+        view: ViewPreset::Tras,
+    },
+    CubeFace {
+        normal: Vec3::new(-1.0, 0.0, 0.0),
+        u: Vec3::new(0.0, -1.0, 0.0),
+        v: Vec3::new(0.0, 0.0, 1.0),
+        label: "ESQUERDA",
+        view: ViewPreset::Esquerda,
+    },
+    CubeFace {
+        normal: Vec3::new(1.0, 0.0, 0.0),
+        u: Vec3::new(0.0, 1.0, 0.0),
+        v: Vec3::new(0.0, 0.0, 1.0),
+        label: "DIREITA",
+        view: ViewPreset::Direita,
+    },
+];
+
+/// Quadrado do cubo no canto superior direito do viewport (encolhe em
+/// viewports pequenos).
+fn cube_rect(viewport: Rect) -> Rect {
+    let size = CUBE_SIZE
+        .min(viewport.width() * 0.4)
+        .min(viewport.height() * 0.4)
+        .max(24.0);
+    Rect::from_min_size(
+        pos2(
+            viewport.right() - CUBE_MARGIN - size,
+            viewport.top() + CUBE_MARGIN,
+        ),
+        vec2(size, size),
+    )
+}
+
+/// Projeção ortográfica de um ponto do cubo (meia-aresta 1, centrado na
+/// origem) dentro de `rect`: só a rotação da câmera, sem perspectiva.
+fn cube_project(cam: &Camera, rect: Rect, p: Vec3) -> Pos2 {
+    let b = cam.basis();
+    // A diagonal do cubo (√3) tem de caber no quadrado em qualquer ângulo.
+    let s = rect.width().min(rect.height()) * 0.5 / 1.8;
+    let c = rect.center();
+    pos2(c.x + dot(p, b.right) * s, c.y - dot(p, b.up) * s)
+}
+
+/// Faces viradas para a câmera.
+fn cube_visible(cam: &Camera) -> impl Iterator<Item = &'static CubeFace> {
+    let forward = cam.basis().forward;
+    CUBE_FACES
+        .iter()
+        .filter(move |f| dot(f.normal, forward) < -1e-4)
+}
+
+/// Face visível sob `pos` e a posição do ponto nela, em `(u, v)` de -1 a 1.
+fn cube_hit(cam: &Camera, rect: Rect, pos: Pos2) -> Option<(&'static CubeFace, f32, f32)> {
+    for face in cube_visible(cam) {
+        let c = cube_project(cam, rect, face.normal);
+        let pu = cube_project(cam, rect, add(face.normal, face.u)) - c;
+        let pv = cube_project(cam, rect, add(face.normal, face.v)) - c;
+        let d = pos - c;
+        let det = pu.x * pv.y - pu.y * pv.x;
+        if det.abs() < 1e-6 {
+            continue;
+        }
+        let u = (d.x * pv.y - d.y * pv.x) / det;
+        let v = (pu.x * d.y - pu.y * d.x) / det;
+        if u.abs() <= 1.0 && v.abs() <= 1.0 {
+            return Some((face, u, v));
+        }
+    }
+    None
+}
+
+/// Direção (do alvo para a câmera) que um clique em `pos` pede: a normal da
+/// face, ou a diagonal da aresta/canto quando o clique fica além de
+/// [`CUBE_EDGE_ZONE`] do centro. `None` fora do cubo.
+fn cube_pick(cam: &Camera, rect: Rect, pos: Pos2) -> Option<Vec3> {
+    let (face, u, v) = cube_hit(cam, rect, pos)?;
+    let snap = |t: f32| {
+        if t > CUBE_EDGE_ZONE {
+            1.0
+        } else if t < -CUBE_EDGE_ZONE {
+            -1.0
+        } else {
+            0.0
+        }
+    };
+    let dir = add(
+        face.normal,
+        add(scale(face.u, snap(u)), scale(face.v, snap(v))),
+    );
+    Some(normalize(dir))
+}
+
+/// Desenha o cubo: faces visíveis preenchidas (a de rótulo `hover` em
+/// destaque), arestas e o rótulo das faces que não estão muito de lado.
+fn draw_view_cube(
+    painter: &Painter,
+    cam: &Camera,
+    rect: Rect,
+    hover: Option<&str>,
+    palette: &Palette,
+) {
+    let forward = cam.basis().forward;
+    let edge = Stroke::new(1.0, palette.muted.gamma_multiply(0.9));
+    for face in cube_visible(cam) {
+        let facing = (-dot(face.normal, forward)).clamp(0.0, 1.0);
+        let corners = [
+            add(face.normal, add(face.u, face.v)),
+            add(face.normal, sub(face.v, face.u)),
+            sub(face.normal, add(face.u, face.v)),
+            add(face.normal, sub(face.u, face.v)),
+        ];
+        let pts: Vec<Pos2> = corners
+            .iter()
+            .map(|&p| cube_project(cam, rect, p))
+            .collect();
+        let fill = if hover == Some(face.label) {
+            palette.accent.gamma_multiply(0.55)
+        } else {
+            palette.muted.gamma_multiply(0.18 + 0.22 * facing)
+        };
+        painter.add(Shape::convex_polygon(pts, fill, edge));
+        if facing > 0.3 {
+            let size = if face.label.len() > 5 { 9.0 } else { 10.0 };
+            painter.text(
+                cube_project(cam, rect, face.normal),
+                Align2::CENTER_CENTER,
+                face.label,
+                FontId::proportional(size),
+                palette.text,
+            );
+        }
+    }
+}
+
+/// Cubo de orientação, como o ViewCube do Inventor: faces nomeadas giram com
+/// a câmera; clique numa face = vista dela; perto de aresta ou canto = vista
+/// diagonal; arrastar = orbitar; ⌂ ao lado = vista isométrica.
+fn view_cube(
+    ui: &mut Ui,
+    painter: &Painter,
+    state: &mut ViewState,
+    viewport: Rect,
+    palette: &Palette,
+) {
+    let rect = cube_rect(viewport);
+    let id = ui.scope_id().with("cubo_orientacao");
+    let response = ui.interact(rect, id, Sense::click_and_drag());
+    let hover = response
+        .hover_pos()
+        .and_then(|p| cube_hit(&state.cam, rect, p))
+        .map(|(face, _, _)| face);
+    if response.dragged_by(PointerButton::Primary) {
+        state.cam.orbit(response.drag_delta());
+        state.mark_adjusted();
+    } else if response.clicked() {
+        if let Some(dir) = response
+            .interact_pointer_pos()
+            .and_then(|p| cube_pick(&state.cam, rect, p))
+        {
+            state.look_from(dir);
+        }
+    }
+    draw_view_cube(painter, &state.cam, rect, hover.map(|f| f.label), palette);
+    if let Some(face) = hover {
+        response.on_hover_text(face.view.hint());
+    }
+
+    let home = Rect::from_min_size(
+        pos2(rect.left() - CUBE_HOME - 4.0, rect.top()),
+        vec2(CUBE_HOME, CUBE_HOME),
+    );
+    let home_resp = ui
+        .interact(home, id.with("inicio"), Sense::click())
+        .on_hover_text("Vista Isométrica (tecla 1)");
+    let color = if home_resp.hovered() {
+        palette.accent
+    } else {
+        palette.muted
+    };
+    painter.text(
+        home.center(),
+        Align2::CENTER_CENTER,
+        "⌂",
+        FontId::proportional(15.0),
+        color,
+    );
+    if home_resp.clicked() {
+        state.set_preset(ViewPreset::Iso);
     }
 }
 
@@ -562,10 +858,17 @@ impl ViewState {
         self.fit_pending = false;
     }
 
-    /// Menu "Simulação > Vista ..." e botões da barra. Uma vista nova é um
-    /// recomeço: o próximo resultado volta a enquadrar.
+    /// Menu "Simulação > Vista ...", teclas 1–5 e ⌂ do cubo. Uma vista nova
+    /// é um recomeço: o próximo resultado volta a enquadrar.
     pub fn set_preset(&mut self, v: ViewPreset) {
         self.cam.preset(v);
+        self.user_adjusted = false;
+    }
+
+    /// Clique numa face, aresta ou canto do cubo de orientação: também é um
+    /// recomeço, como um preset.
+    pub fn look_from(&mut self, dir: Vec3) {
+        self.cam.look_from(dir);
         self.user_adjusted = false;
     }
 
@@ -865,6 +1168,7 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     };
     let readout = current.filter(|_| state.sim.active());
     overlay(&painter, rect, toolpath, readout, &palette);
+    view_cube(ui, &painter, state, rect, &palette);
     picked
 }
 
@@ -923,16 +1227,6 @@ fn toolbar(ui: &mut Ui, state: &mut ViewState, total: usize) {
         }
         if ui.button("⏹").on_hover_text("Parar").clicked() {
             state.sim_stop();
-        }
-        ui.separator();
-        for preset in ViewPreset::ALL {
-            if ui
-                .button(preset.label())
-                .on_hover_text(preset.hint())
-                .clicked()
-            {
-                state.set_preset(preset);
-            }
         }
         ui.separator();
         ui.checkbox(&mut state.sim.show_trace, "Traçado")
@@ -1269,9 +1563,10 @@ fn flush_run(painter: &Painter, points: &[Pos2], style: Option<Style>, palette: 
     }
 }
 
-/// Textos sobre o viewport: resumo (acima, à esquerda), leitura da máquina
-/// durante a simulação (acima, à direita: X da tocha e ângulo A da peça),
-/// aviso de decimação (abaixo, à esquerda) e dica de uso (abaixo, à direita).
+/// Textos sobre o viewport: resumo e, durante a simulação, a leitura da
+/// máquina (acima, à esquerda: X da tocha e ângulo A da peça), aviso de
+/// decimação (abaixo, à esquerda) e dica de uso (abaixo, à direita). O canto
+/// superior direito é do cubo de orientação.
 fn overlay(
     painter: &Painter,
     rect: Rect,
@@ -1283,8 +1578,8 @@ fn overlay(
     let pad = vec2(8.0, 6.0);
     if let Some(pt) = current {
         painter.text(
-            rect.right_top() + vec2(-pad.x, pad.y),
-            Align2::RIGHT_TOP,
+            rect.left_top() + vec2(pad.x, pad.y + 16.0),
+            Align2::LEFT_TOP,
             format!("Tocha X {:.3} · Peça A {:.1}°", pt.pos.x, pt.a_deg),
             font.clone(),
             palette.text,
@@ -1343,7 +1638,7 @@ mod tests {
 
     fn side_cam() -> Camera {
         let mut cam = Camera::default();
-        cam.preset(ViewPreset::Lado);
+        cam.preset(ViewPreset::Frente);
         cam.target = Vec3::default();
         cam.distance = 100.0;
         cam
@@ -1442,9 +1737,11 @@ mod tests {
         let mut cam = Camera::default();
         let cases = [
             (ViewPreset::Iso, -45.0, 25.0),
-            (ViewPreset::Lado, 0.0, 0.0),
-            (ViewPreset::Frente, -90.0, 0.0),
-            (ViewPreset::Tras, 90.0, 0.0),
+            (ViewPreset::Frente, 0.0, 0.0),
+            (ViewPreset::Esquerda, -90.0, 0.0),
+            (ViewPreset::Direita, 90.0, 0.0),
+            (ViewPreset::Tras, 180.0, 0.0),
+            (ViewPreset::Base, 0.0, -89.0),
         ];
         for (preset, yaw, pitch) in cases {
             cam.preset(preset);
@@ -1652,7 +1949,7 @@ mod tests {
         assert!(state.fit_pending && !state.user_adjusted);
         state.fit_pending = false;
         state.mark_adjusted();
-        state.set_preset(ViewPreset::Lado);
+        state.set_preset(ViewPreset::Frente);
         assert!(!state.user_adjusted, "preset rearma o enquadramento");
         assert!(state.note_result(4, Operation::ChapaPlana));
         assert!(state.fit_pending);
@@ -1661,7 +1958,7 @@ mod tests {
     #[test]
     fn state_lives_in_egui_memory() {
         let ctx = egui::Context::default();
-        with_state(&ctx, |s| s.set_preset(ViewPreset::Frente));
+        with_state(&ctx, |s| s.set_preset(ViewPreset::Esquerda));
         let yaw = with_state(&ctx, |s| s.cam.yaw);
         assert!((yaw + 90.0).abs() < 1e-3, "yaw {yaw}");
     }
@@ -1781,6 +2078,171 @@ mod tests {
             Shape::Text(t) => texts.push(t.galley.text().to_owned()),
             _ => {}
         }
+    }
+
+    /// `look_from` reproduz os ângulos de cada vista a partir da direção em
+    /// que a câmera dela fica em relação ao alvo.
+    #[test]
+    fn look_from_matches_presets() {
+        for preset in ViewPreset::ALL {
+            let mut cam = Camera::default();
+            cam.preset(preset);
+            let b = cam.basis();
+            let dir = normalize(sub(b.eye, cam.target));
+            let mut other = Camera::default();
+            other.look_from(dir);
+            let (yaw, pitch) = preset.angles();
+            assert!(
+                wrap_deg(other.yaw - yaw).abs() < 0.1,
+                "{preset:?}: yaw {} vs {yaw}",
+                other.yaw
+            );
+            assert!(
+                (other.pitch - pitch).abs() < 0.1,
+                "{preset:?}: pitch {} vs {pitch}",
+                other.pitch
+            );
+        }
+        // Direção exatamente vertical não tem yaw: mantém o atual.
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Iso);
+        cam.look_from(Vec3::new(0.0, 0.0, 1.0));
+        assert!((cam.yaw + 45.0).abs() < 1e-3 && cam.pitch > 88.0, "{cam:?}");
+    }
+
+    /// A isométrica mostra três faces do cubo: Esquerda, Frente e Topo.
+    #[test]
+    fn iso_shows_left_front_and_top_faces() {
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Iso);
+        let labels: Vec<&str> = cube_visible(&cam).map(|f| f.label).collect();
+        assert_eq!(labels.len(), 3, "{labels:?}");
+        for l in ["ESQUERDA", "FRENTE", "TOPO"] {
+            assert!(labels.contains(&l), "{l} ausente em {labels:?}");
+        }
+    }
+
+    /// Clicar no centro de uma face visível pede a vista pela normal dela;
+    /// fora do cubo não pede nada.
+    #[test]
+    fn cube_pick_face_center_returns_its_normal() {
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Iso);
+        let rect = Rect::from_min_size(pos2(700.0, 60.0), vec2(CUBE_SIZE, CUBE_SIZE));
+        for face in cube_visible(&cam) {
+            let at = cube_project(&cam, rect, face.normal);
+            let dir = cube_pick(&cam, rect, at)
+                .unwrap_or_else(|| panic!("face {} não foi atingida", face.label));
+            assert!(
+                length(sub(dir, face.normal)) < 1e-3,
+                "face {}: {dir:?}",
+                face.label
+            );
+        }
+        assert!(cube_pick(&cam, rect, pos2(10.0, 10.0)).is_none());
+    }
+
+    /// Clicar perto do canto comum de três faces pede a vista diagonal.
+    #[test]
+    fn cube_pick_corner_snaps_to_diagonal() {
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Iso);
+        let rect = Rect::from_min_size(pos2(700.0, 60.0), vec2(CUBE_SIZE, CUBE_SIZE));
+        // Canto comum de ESQUERDA (-X), FRENTE (-Y) e TOPO (+Z), um pouco
+        // para dentro para cair dentro das três faces.
+        let corner = Vec3::new(-0.95, -0.95, 0.95);
+        let dir = cube_pick(&cam, rect, cube_project(&cam, rect, corner))
+            .unwrap_or_else(|| panic!("canto não atingido"));
+        let want = normalize(Vec3::new(-1.0, -1.0, 1.0));
+        assert!(length(sub(dir, want)) < 1e-3, "{dir:?}");
+    }
+
+    /// O cubo fica no canto superior direito do viewport e só rotula as
+    /// faces visíveis.
+    #[test]
+    fn view_cube_draws_visible_face_labels() {
+        let palette = Palette::light();
+        let viewport = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let rect = cube_rect(viewport);
+        assert!(
+            viewport.contains_rect(rect) && rect.right() > 700.0 && rect.top() < 100.0,
+            "{rect:?}"
+        );
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Iso);
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), viewport);
+            draw_view_cube(&painter, &cam, rect, None, &palette);
+        });
+        output.textures_delta.clear();
+        let (mut circles, mut texts) = (Vec::new(), Vec::new());
+        for clipped in &output.shapes {
+            collect_shapes(&clipped.shape, &mut circles, &mut texts);
+        }
+        for l in ["ESQUERDA", "FRENTE", "TOPO"] {
+            assert!(
+                texts.iter().any(|t| t == l),
+                "rótulo {l} ausente: {texts:?}"
+            );
+        }
+        assert!(
+            !texts
+                .iter()
+                .any(|t| t == "TRÁS" || t == "BASE" || t == "DIREITA"),
+            "faces ocultas rotuladas: {texts:?}"
+        );
+    }
+
+    /// Um clique na face TOPO do cubo leva a aba para a vista superior.
+    #[test]
+    fn clicking_cube_top_face_sets_top_view() {
+        use egui::{Event, Modifiers, RawInput};
+
+        let palette = Palette::light();
+        let mut state = ViewState::default();
+        state.set_preset(ViewPreset::Iso);
+        let size = vec2(800.0, 600.0);
+        let viewport = Rect::from_min_size(egui::Pos2::ZERO, size);
+        let at = cube_project(&state.cam, cube_rect(viewport), Vec3::new(0.0, 0.0, 1.0));
+        let ctx = egui::Context::default();
+        let frames = [
+            vec![Event::PointerMoved(at)],
+            vec![Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed: true,
+                modifiers: Modifiers::NONE,
+            }],
+            vec![Event::PointerButton {
+                pos: at,
+                button: PointerButton::Primary,
+                pressed: false,
+                modifiers: Modifiers::NONE,
+            }],
+        ];
+        for events in frames {
+            let input = RawInput {
+                screen_rect: Some(viewport),
+                events,
+                ..RawInput::default()
+            };
+            let mut output = ctx.run_pass(input, |ctx| {
+                let mut ui = Ui::new(
+                    ctx.clone(),
+                    Id::unique("teste_cubo"),
+                    egui::UiBuilder::new().max_rect(viewport),
+                );
+                let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
+                view_cube(&mut ui, &painter, &mut state, response.rect, &palette);
+            });
+            output.textures_delta.clear();
+        }
+        assert!(
+            state.cam.pitch > 88.0,
+            "esperava a vista superior, veio pitch {}",
+            state.cam.pitch
+        );
     }
 
     /// Recolhe segmentos de reta (pontos, cor do traço) pintados num quadro.

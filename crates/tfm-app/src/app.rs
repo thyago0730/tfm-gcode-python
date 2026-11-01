@@ -452,9 +452,11 @@ const MENUS: &[(&str, &[Entry])] = &[
         &[
             Item("Vista Isométrica"),
             Item("Vista Superior"),
-            Item("Vista Lateral"),
             Item("Vista Frontal"),
+            Item("Vista Esquerda"),
+            Item("Vista Direita"),
             Item("Vista Traseira"),
+            Item("Vista Inferior"),
             Sep,
             Item("Simular"),
             Item("Pausar"),

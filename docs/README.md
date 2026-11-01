@@ -57,7 +57,7 @@ Testes de integração em `crates/tfm-core/tests/`: `golden.rs` (paridade com as
 | `widgets.rs` | Widgets reutilizáveis: campos com rótulo e tooltip, seções, KPIs. |
 | `icons.rs` | Ícones das sete operações desenhados com `Painter` (porta dos Canvas do Tk). |
 | `integration.rs` | Ações: gerar o `.tap` (com alerta G53), abrir no Mach3, salvar/carregar procedimento, atalhos de teclado. |
-| `view3d.rs` | 3D interativo: câmera orbital, grade, eixos, silhueta da peça, trajetória por camada, presets de vista e simulação. Nas operações cilíndricas a peça gira em torno do eixo A sob a tocha fixa. |
+| `view3d.rs` | 3D interativo: câmera orbital, grade, eixos na origem, silhueta da peça, trajetória por camada, cubo de orientação (faces clicáveis, arestas e cantos, ⌂), presets de vista e simulação. Nas operações cilíndricas a peça gira em torno do eixo A sob a tocha fixa. |
 | `charts.rs` | Gráficos do centro: Análise Temporal, Oscilação, Estatísticas e o dashboard de Processo. |
 | `panels/mod.rs` | Declara os quatro painéis fixos. |
 | `panels/left.rs` | Painel esquerdo: cartão e lista de operações, abas Parâmetros / Processo / Rastreabilidade. |

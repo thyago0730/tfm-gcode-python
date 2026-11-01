@@ -18,7 +18,7 @@ pub const SHORTCUTS: [(&str, &str); 9] = [
     ("Espaço", "Play/pause da simulação"),
     (
         "1–5",
-        "Vistas: Isométrica, Superior, Lateral, Frontal, Traseira",
+        "Vistas: Isométrica, Superior, Frontal, Esquerda, Direita",
     ),
 ];
 

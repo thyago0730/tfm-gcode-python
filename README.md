@@ -74,6 +74,7 @@ Os caminhos são relativos à **raiz do aplicativo**: a raiz do repositório em 
 - **Relatório PDF** e **atualizador automático** (`latest.json`) ainda não foram portados; o item de menu do relatório aparece desabilitado ("em breve").
 - O `.tap` é gravado com fim de linha **CRLF** no Windows (como o Python gravava lá) e LF nos demais sistemas; o Mach3 aceita os dois.
 - **No 3D das operações cilíndricas quem gira é a peça.** Como na máquina, a tocha fica fixa no topo e anda só em X (e em Z por camada); a peça gira em torno do centro do eixo A levando o cordão já depositado, e durante a simulação o viewport mostra a leitura "Tocha X … · Peça A …". No Python a tocha orbitava a peça parada. O G-code não muda (o Mach3 continua controlando o Z); chapa plana e bolacha seguem desenhadas como antes.
+- **Cubo de orientação no 3D**, como o ViewCube do Inventor, no lugar dos botões ISO/Topo/Lado/Frente/Trás: as faces nomeadas giram com a câmera, clicar numa face escolhe a vista, perto de uma aresta ou canto dá a vista diagonal, arrastar orbita e ⌂ volta à isométrica. Os nomes seguem o Inventor: Frente é o lado do operador (eixo X para a direita), Esquerda e Direita olham pelas pontas do eixo, Topo, Base e Trás completam. As teclas 1–5 e o menu Simulação mantêm os mesmos ângulos de antes (1 ISO, 2 Topo, 3 Frente, 4 Esquerda, 5 Direita).
 - O 3D é um renderizador por software sobre o `Painter` do egui (linhas projetadas), não VTK.
 
 ## Integração contínua
