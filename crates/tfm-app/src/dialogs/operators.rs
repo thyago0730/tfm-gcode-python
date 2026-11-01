@@ -38,14 +38,6 @@ pub fn is_expired(validity: &str, today: NaiveDate) -> bool {
 }
 
 impl OperatorsState {
-    pub const EMPTY: Self = OperatorsState {
-        selected: None,
-        editing: None,
-        name: String::new(),
-        qualification_id: String::new(),
-        validity: String::new(),
-    };
-
     pub fn clear_form(&mut self) {
         self.editing = None;
         self.name.clear();

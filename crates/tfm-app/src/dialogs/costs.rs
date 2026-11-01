@@ -28,15 +28,6 @@ pub struct CostValues {
 }
 
 impl CostsState {
-    pub const EMPTY: Self = CostsState {
-        loaded: false,
-        powder: String::new(),
-        gas: String::new(),
-        labor: String::new(),
-        machine: String::new(),
-        symbol: String::new(),
-    };
-
     pub fn load(&mut self, cfg: &AppConfig) {
         let c = &cfg.costs;
         self.powder = fmt_num(c.powder_brl_kg);

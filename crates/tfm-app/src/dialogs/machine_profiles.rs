@@ -3,21 +3,19 @@
 //! config (e para o disco) em "Salvar", que também torna o perfil
 //! selecionado o ativo (`active_machine_profile`), como o Python.
 
-use std::hash::BuildHasherDefault;
-
 use egui::RichText;
 use indexmap::IndexMap;
 use tfm_core::config::{AppConfig, MachineLimits, MachineProfile};
 
 use crate::app::{NotifyKind, TfmApp};
-use crate::dialogs::{self, fmt_num, DialogId, Hasher};
+use crate::dialogs::{self, fmt_num, DialogId};
 use crate::widgets::{num_field, parse_num, text_field};
 
 /// Chave do perfil padrão, que não pode ser excluído.
 pub const DEFAULT_KEY: &str = "default";
 
 /// Cópia de trabalho dos perfis (mesma ordem do config).
-pub type ProfileMap = IndexMap<String, MachineProfile, Hasher>;
+pub type ProfileMap = IndexMap<String, MachineProfile>;
 
 #[derive(Clone, Debug, Default)]
 pub struct ProfilesState {
@@ -35,25 +33,8 @@ pub struct ProfilesState {
 }
 
 impl ProfilesState {
-    pub const EMPTY: Self = ProfilesState {
-        loaded: false,
-        profiles: IndexMap::with_hasher(BuildHasherDefault::new()),
-        selected: String::new(),
-        rpm: String::new(),
-        length_x: String::new(),
-        diameter: String::new(),
-        feed: String::new(),
-        creating: false,
-        new_name: String::new(),
-        confirm_delete: false,
-    };
-
     pub fn load(&mut self, cfg: &AppConfig) {
-        self.profiles = cfg
-            .machine_profiles
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        self.profiles = cfg.machine_profiles.clone();
         if self.profiles.is_empty() {
             self.profiles
                 .insert(DEFAULT_KEY.to_string(), MachineProfile::default());
@@ -155,11 +136,7 @@ impl ProfilesState {
 
     /// Aplica a cópia no config: perfis e perfil ativo = selecionado.
     pub fn apply(&self, cfg: &mut AppConfig) {
-        cfg.machine_profiles = self
-            .profiles
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect();
+        cfg.machine_profiles = self.profiles.clone();
         cfg.active_machine_profile = self.selected.clone();
     }
 }

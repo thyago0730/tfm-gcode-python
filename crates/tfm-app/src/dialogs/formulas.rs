@@ -125,16 +125,6 @@ pub fn format_value(value: Option<f64>) -> String {
 }
 
 impl FormulasState {
-    pub const EMPTY: Self = FormulasState {
-        loaded: false,
-        text: String::new(),
-        notes: String::new(),
-        status: None,
-        results: Vec::new(),
-        variables: Vec::new(),
-        pending_insert: None,
-    };
-
     pub fn load(&mut self, app: &TfmApp) {
         self.text = format_expressions(&app.cfg.formulas.expressions);
         self.notes = app.cfg.formulas.notes.clone();

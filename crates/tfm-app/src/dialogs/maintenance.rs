@@ -29,17 +29,6 @@ pub struct MaintenanceState {
     pub new_limit: String,
 }
 
-impl MaintenanceState {
-    pub const EMPTY: Self = MaintenanceState {
-        tab: MaintTab::Status,
-        confirm_reset: None,
-        edit_limit: None,
-        adding: false,
-        new_name: String::new(),
-        new_limit: String::new(),
-    };
-}
-
 /// Chave do componente a partir do nome digitado (`name.lower().replace(" ", "_")`).
 pub fn component_key(name: &str) -> String {
     name.trim().to_lowercase().replace(' ', "_")

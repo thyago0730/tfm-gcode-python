@@ -20,7 +20,6 @@
 //! `&mut app.quality` e `app.notify(..)` sem conflito.
 
 use std::collections::HashSet;
-use std::hash::{BuildHasherDefault, DefaultHasher};
 
 use tfm_core::params::Params;
 
@@ -92,13 +91,10 @@ impl DialogId {
     }
 }
 
-/// Hasher determinístico e construível em `const` (ver [`Dialogs::EMPTY`]).
-pub type Hasher = BuildHasherDefault<DefaultHasher>;
-
 /// Diálogos abertos e o estado de edição de cada um.
 #[derive(Default)]
 pub struct Dialogs {
-    pub open: HashSet<DialogId, Hasher>,
+    pub open: HashSet<DialogId>,
     pub costs: costs::CostsState,
     pub powders: powders::PowdersState,
     pub formulas: formulas::FormulasState,
@@ -110,27 +106,7 @@ pub struct Dialogs {
     pub tutorial: tutorial::TutorialState,
 }
 
-/// Ponte de compatibilidade: `app.rs` ainda constrói o campo como o valor
-/// unitário `Dialogs` (do esqueleto); este `const` mantém esse código
-/// compilando até a troca por `Dialogs::default()`.
-#[allow(non_upper_case_globals)]
-pub const Dialogs: Dialogs = Dialogs::EMPTY;
-
 impl Dialogs {
-    /// Estado vazio, igual a `Default::default()`, mas utilizável em `const`.
-    pub const EMPTY: Dialogs = Dialogs {
-        open: HashSet::with_hasher(BuildHasherDefault::new()),
-        costs: costs::CostsState::EMPTY,
-        powders: powders::PowdersState::EMPTY,
-        formulas: formulas::FormulasState::EMPTY,
-        machine_profiles: machine_profiles::ProfilesState::EMPTY,
-        mach3: mach3_path::Mach3State::EMPTY,
-        operators: operators::OperatorsState::EMPTY,
-        wps: wps::WpsState::EMPTY,
-        maintenance: maintenance::MaintenanceState::EMPTY,
-        tutorial: tutorial::TutorialState::EMPTY,
-    };
-
     /// Abre (ou traz de volta) um diálogo.
     pub fn open(&mut self, id: DialogId) {
         self.open.insert(id);

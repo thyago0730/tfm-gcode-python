@@ -103,15 +103,6 @@ pub struct PowdersState {
 }
 
 impl PowdersState {
-    pub const EMPTY: Self = PowdersState {
-        loaded: false,
-        powders: Vec::new(),
-        active: String::new(),
-        selected: None,
-        editor: None,
-        confirm_remove: None,
-    };
-
     pub fn load(&mut self, cfg: &AppConfig) {
         self.powders = cfg.powders.clone();
         self.active = cfg.active_powder.clone();

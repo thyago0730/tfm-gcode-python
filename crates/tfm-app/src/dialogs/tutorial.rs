@@ -12,10 +12,6 @@ pub struct TutorialState {
     pub tab: usize,
 }
 
-impl TutorialState {
-    pub const EMPTY: Self = TutorialState { tab: 0 };
-}
-
 const INTRO: &str = "TFM G-Code Generator
 
 Gera G-code para revestimento PTA em peças cilíndricas com suporte a ISO 3834.

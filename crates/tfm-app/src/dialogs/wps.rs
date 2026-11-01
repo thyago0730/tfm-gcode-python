@@ -52,15 +52,6 @@ pub struct WpsState {
     pub confirm_remove: Option<usize>,
 }
 
-impl WpsState {
-    pub const EMPTY: Self = WpsState {
-        selected: None,
-        new_name: String::new(),
-        editor: None,
-        confirm_remove: None,
-    };
-}
-
 /// [`Params`] como objeto JSON (os `params` de referência da EPS).
 pub fn params_object(p: &Params) -> IndexMap<String, Value> {
     match serde_json::to_value(p) {

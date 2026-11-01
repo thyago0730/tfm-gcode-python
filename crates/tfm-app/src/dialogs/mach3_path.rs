@@ -35,17 +35,6 @@ pub struct Mach3State {
 }
 
 impl Mach3State {
-    pub const EMPTY: Self = Mach3State {
-        loaded: false,
-        integration: Integration {
-            mach3_path: String::new(),
-            gcode_dir: String::new(),
-            write_autoload_txt: false,
-            allow_file_association_fallback: false,
-            mach3_profile: String::new(),
-        },
-    };
-
     pub fn load(&mut self, cfg: &AppConfig) {
         self.integration = cfg.integration.clone();
         self.loaded = true;
