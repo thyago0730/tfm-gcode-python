@@ -18,7 +18,7 @@ use egui::{
     pos2, vec2, Align2, CornerRadius, FontId, Id, Painter, PointerButton, Pos2, Rect, Response,
     Sense, Shape, Slider, Stroke, Ui, Vec2,
 };
-use tfm_core::params::{FlatOrientation, Params, WeldingMode};
+use tfm_core::params::{FlatOrientation, Operation, Params, WeldingMode};
 use tfm_core::toolpath::{PathPoint, Toolpath, Vec3};
 
 use crate::app::TfmApp;
@@ -491,11 +491,18 @@ pub struct ViewState {
     pub cam: Camera,
     pub sim: Sim,
     /// Enquadrar a cena no próximo quadro em que houver resultado. Começa
-    /// ligado, religa a cada resultado novo e desliga quando o usuário mexe
-    /// na câmera antes do enquadramento acontecer.
+    /// ligado e religa a cada resultado novo enquanto o usuário não ajustou
+    /// a câmera (ver [`Self::user_adjusted`]) ou quando a operação muda.
     pub fit_pending: bool,
+    /// O usuário orbitou, moveu ou deu zoom: recálculos do mesmo tipo de peça
+    /// não reenquadram mais (o zoom/pan sobrevive a cada ajuste de parâmetro).
+    /// Volta a `false` no duplo clique, em [`Self::request_fit`], nos presets
+    /// e quando a operação muda.
+    pub user_adjusted: bool,
     /// Chave do último resultado visto.
     last_key: Option<u64>,
+    /// Operação do último resultado visto (peça diferente = enquadrar de novo).
+    last_operation: Option<Operation>,
     /// Buffer reaproveitado para a polilinha em desenho.
     scratch: Vec<Pos2>,
 }
@@ -506,27 +513,49 @@ impl Default for ViewState {
             cam: Camera::default(),
             sim: Sim::default(),
             fit_pending: true,
+            user_adjusted: false,
             last_key: None,
+            last_operation: None,
             scratch: Vec::new(),
         }
     }
 }
 
 impl ViewState {
-    /// Registra a chave do resultado atual; devolve `true` (e pede
-    /// enquadramento) quando é um resultado diferente do último visto.
-    pub fn note_result(&mut self, key: u64) -> bool {
+    /// Registra o resultado atual; devolve `true` quando a chave mudou. Aí a
+    /// simulação para (o marcador da tocha não pula no meio de um programa
+    /// novo) e o enquadramento é pedido se o usuário ainda não ajustou a
+    /// câmera — ou de qualquer modo quando a operação muda, porque é outra
+    /// peça (e o ajuste anterior deixa de valer).
+    pub fn note_result(&mut self, key: u64, operation: Operation) -> bool {
         if self.last_key == Some(key) {
             return false;
         }
         self.last_key = Some(key);
-        self.fit_pending = true;
+        let op_changed = self.last_operation.is_some_and(|prev| prev != operation);
+        self.last_operation = Some(operation);
+        self.sim.stop();
+        if op_changed {
+            self.user_adjusted = false;
+        }
+        if !self.user_adjusted {
+            self.fit_pending = true;
+        }
         true
     }
 
-    /// Menu "Simulação > Vista ...".
+    /// O usuário mexeu na câmera (órbita, pan ou zoom): cancela um
+    /// enquadramento pendente e passa a preservar a vista nos recálculos.
+    pub fn mark_adjusted(&mut self) {
+        self.user_adjusted = true;
+        self.fit_pending = false;
+    }
+
+    /// Menu "Simulação > Vista ..." e botões da barra. Uma vista nova é um
+    /// recomeço: o próximo resultado volta a enquadrar.
     pub fn set_preset(&mut self, v: ViewPreset) {
         self.cam.preset(v);
+        self.user_adjusted = false;
     }
 
     /// Menu "Simulação > Simular" (e botão ▶).
@@ -544,9 +573,11 @@ impl ViewState {
         self.sim.stop();
     }
 
-    /// Pede um novo enquadramento (duplo clique).
+    /// Pede um novo enquadramento (duplo clique) e volta a enquadrar nos
+    /// próximos recálculos.
     pub fn request_fit(&mut self) {
         self.fit_pending = true;
+        self.user_adjusted = false;
     }
 }
 
@@ -680,7 +711,7 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     let palette = app.palette;
     let result = app.result.as_ref();
     if let Some(r) = result {
-        state.note_result(r.key);
+        state.note_result(r.key, Operation::from_params(&r.params));
     }
     let toolpath = result.map(|r| &r.toolpath).filter(|t| !t.is_empty());
     let total = toolpath.map_or(0, Toolpath::point_count);
@@ -710,7 +741,9 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     let picked = match toolpath {
         Some(tp) => {
             let stick = (bounds.extent() * 0.08).max(2.0);
-            let pointer = if response.clicked() {
+            // Cada clique de um duplo clique também conta como `clicked()`:
+            // enquadrar não pode trocar a linha selecionada.
+            let pointer = if response.clicked() && !response.double_clicked() {
                 response.interact_pointer_pos()
             } else {
                 None
@@ -779,7 +812,7 @@ fn interact(
         }
     }
     if touched {
-        state.fit_pending = false;
+        state.mark_adjusted();
     }
     if response.double_clicked() {
         state.request_fit();
@@ -1410,13 +1443,20 @@ mod tests {
 
     #[test]
     fn new_result_requests_fit_once() {
+        let op = Operation::Espiral;
         let mut state = ViewState::default();
         assert!(state.fit_pending, "estado inicial pede enquadramento");
         state.fit_pending = false;
-        assert!(state.note_result(42), "resultado novo pede enquadramento");
+        assert!(
+            state.note_result(42, op),
+            "resultado novo pede enquadramento"
+        );
         assert!(state.fit_pending);
         state.fit_pending = false;
-        assert!(!state.note_result(42), "mesmo resultado não pede de novo");
+        assert!(
+            !state.note_result(42, op),
+            "mesmo resultado não pede de novo"
+        );
         assert!(!state.fit_pending);
         state.set_preset(ViewPreset::Topo);
         assert!((state.cam.pitch - 89.0).abs() < 0.5);
@@ -1426,6 +1466,59 @@ mod tests {
         assert!(!state.sim.playing);
         state.sim_stop();
         assert_eq!(state.sim.progress, 0.0);
+        // Depois de o usuário ajustar a câmera, um recálculo da mesma
+        // operação não reenquadra; a simulação em curso é parada.
+        state.mark_adjusted();
+        state.sim_play();
+        state.sim.advance(1.0, 1000);
+        assert!(
+            state.note_result(43, op),
+            "chave nova continua sendo novidade"
+        );
+        assert!(
+            !state.fit_pending,
+            "ajuste do usuário sobrevive ao recálculo"
+        );
+        assert!(
+            !state.sim.playing && state.sim.progress == 0.0,
+            "resultado novo para a simulação"
+        );
+    }
+
+    #[test]
+    fn user_zoom_survives_recompute() {
+        let mut state = ViewState::default();
+        assert!(state.note_result(1, Operation::Espiral));
+        state.fit_pending = false; // enquadramento consumido no quadro
+        state.cam.zoom(0.5);
+        state.mark_adjusted();
+        assert!(state.user_adjusted && !state.fit_pending);
+
+        // Mesma operação, parâmetros novos: nada de reenquadrar.
+        assert!(state.note_result(2, Operation::Espiral));
+        assert!(
+            !state.fit_pending,
+            "zoom do operador descartado por um recálculo"
+        );
+        assert!(state.user_adjusted);
+
+        // Operação diferente é outra peça: enquadra e esquece o ajuste.
+        assert!(state.note_result(3, Operation::ChapaPlana));
+        assert!(state.fit_pending, "operação nova deveria enquadrar");
+        assert!(!state.user_adjusted);
+        state.fit_pending = false;
+
+        // Duplo clique (request_fit) e presets rearmam o enquadramento
+        // automático para os próximos recálculos.
+        state.mark_adjusted();
+        state.request_fit();
+        assert!(state.fit_pending && !state.user_adjusted);
+        state.fit_pending = false;
+        state.mark_adjusted();
+        state.set_preset(ViewPreset::Lado);
+        assert!(!state.user_adjusted, "preset rearma o enquadramento");
+        assert!(state.note_result(4, Operation::ChapaPlana));
+        assert!(state.fit_pending);
     }
 
     #[test]
