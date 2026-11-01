@@ -563,9 +563,11 @@ fn serializes_with_python_json_keys_and_enum_strings() {
         !obj.contains_key("app_version"),
         "app_version ausente quando None"
     );
-    let mut with = Params::default();
-    with.taxa_de_deposicao = Some(120.0);
-    with.app_version = Some("11.3.2".to_string());
+    let with = Params {
+        taxa_de_deposicao: Some(120.0),
+        app_version: Some("11.3.2".to_string()),
+        ..Params::default()
+    };
     let v = serde_json::to_value(&with).expect("serialize");
     assert_eq!(v["taxa_de_deposicao"], json!(120.0));
     assert_eq!(v["app_version"], json!("11.3.2"));
