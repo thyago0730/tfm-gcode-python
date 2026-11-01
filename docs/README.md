@@ -24,7 +24,7 @@ Visão geral, build, testes e fixtures golden estão no [`README.md`](../README.
 | `overlap.rs` | Modelo de sobreposição efetiva do cordão (passo, largura efetiva, nº de passes); porta literal de `overlap_model.py`. |
 | `gcode/mod.rs` | `generate()`, `generate_with_timestamp()`, `GenError`; valida, normaliza e despacha para o módulo do modo. |
 | `gcode/common.rs` | Cabeçalho e rodapé, sequências de tocha (M101/M102 e atrasos), formatação numérica igual à do Python, geometria rotativa. |
-| `deposit.rs` | Simulação do material depositado: mapa de altura `h(X, A)` por `vazão × tempo`, relatório de alturas e sobremetal e cálculo da compensação de rotação. |
+| `deposit.rs` | Simulação do material depositado: mapa de altura `h(X, A)` por `vazão × tempo`, relatório de alturas e sobremetal, cálculo da compensação na espiral (`solve_feed_factors`) e nas quadradas, por posição em X (`solve_band_factors`). |
 | `gcode/spiral.rs` | Modo Espiral (hélice X+A por camada, externo ou interno); com `fechamento_uniforme`, material de borda a borda, voltas inteiras e anéis nas pontas (`overlap::uniform_closing`); com `compensar_rotacao`, `F` por trecho (`deposit::solve_feed_factors`). |
 | `gcode/multiperfil.rs` | Modo Espiral Multiperfil (vários perfis por setor, formas retangular/trapezoidal/triangular, estratégias). |
 | `gcode/bolacha.rs` | Modo Bolacha (face circular: anéis ou espiral, com paradas). |

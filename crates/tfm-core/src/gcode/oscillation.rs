@@ -28,6 +28,7 @@ use super::common::{
     fechamento_uniforme_comment, layer_separator, overlap_metrics, py_max, py_min, py_or, Pos,
 };
 use super::GenError;
+use crate::deposit::{solve_band_factors, BandGroup};
 use crate::overlap::{uniform_closing, UniformClosing};
 use crate::params::{Direction, OscillationType, Params, WeldingMode};
 
@@ -41,6 +42,13 @@ const SQUARE_GEOM_ERROR: &str = "(ERRO: Diametro ou deslocamento invalido para c
 /// maiores crescem por duplicação a partir daí. Evita que uma granularidade
 /// minúscula peça de uma vez uma alocação absurda.
 const RESERVE_CAP: usize = 4_000_000;
+/// Amostras por faixa no cálculo da compensação das quadradas.
+const BAND_SAMPLES: usize = 16;
+/// Largura de cada faixa de X da compensação das quadradas (mm).
+const SLOW_BIN_MM: f64 = 1.0;
+/// No fechamento uniforme das quadradas o apagamento gira este tanto mais
+/// rápido: o mesmo material num arco maior não forma um calombo.
+const CLOSING_TAIL_SPREAD: f64 = 4.0;
 
 // ---------------------------------------------------------------------------
 // Pontos de entrada
@@ -247,6 +255,16 @@ impl LayerFrame {
         }
     }
 
+    /// Velocidades do apagamento nas quadradas: no fechamento uniforme o mesmo
+    /// material sai num arco maior, sem formar um calombo sobre a última banda.
+    fn square_tail_speeds(&self, (feed, speed): (f64, f64)) -> (f64, f64) {
+        if self.closing {
+            (feed * CLOSING_TAIL_SPREAD, speed * CLOSING_TAIL_SPREAD)
+        } else {
+            (feed, speed)
+        }
+    }
+
     /// Final de todo segmento: apagamento da tocha (prolongado ao longo do
     /// último cordão), recuo em Z, saída em X na interna e separador de camadas.
     fn finish_segment(
@@ -443,6 +461,28 @@ struct SquareGeom {
     actual_delta_a_deg: f64,
     feed_x: f64,
     feed_a: f64,
+    /// Compensação: quantas vezes mais devagar em cada posição de X.
+    slow: Option<SlowProfile>,
+}
+
+/// Fator de desaceleração por posição de X, em faixas de [`SLOW_BIN_MM`].
+struct SlowProfile {
+    x0: f64,
+    factors: Vec<f64>,
+}
+
+impl SlowProfile {
+    fn at(&self, x: f64) -> f64 {
+        let i = ((x - self.x0) / SLOW_BIN_MM).max(0.0) as usize;
+        self.factors
+            .get(i.min(self.factors.len().saturating_sub(1)))
+            .copied()
+            .unwrap_or(1.0)
+    }
+
+    fn max(&self) -> f64 {
+        self.factors.iter().copied().fold(1.0, f64::max)
+    }
 }
 
 impl SquareGeom {
@@ -494,7 +534,65 @@ impl SquareGeom {
             feed_x: py_or(p.velocidade_oscilacao_mm_min, taxa_de_deposicao),
             // Feed de A: RPM -> graus/min.
             feed_a: rpm_a * 360.0,
+            slow: None,
         })
+    }
+
+    /// Calcula quanto desacelerar em cada posição de X para encher as pontas.
+    /// Na sequencial o material sai nas pernas em A, nas duas extremidades da
+    /// oscilação; o X, muito mais rápido, fica fixo. Na contínua ele sai na
+    /// diagonal, e X e A desaceleram juntos.
+    fn plan_slowdown(&mut self, p: &Params, fr: &LayerFrame, continuous: bool) {
+        if !(fr.closing && p.compensar_rotacao) {
+            return;
+        }
+        let voltas = self.num_passos_angulares_por_volta as f64;
+        let perna_a = voltas * self.actual_delta_a_deg / 2.0 / self.feed_a.max(1e-9);
+        let perna_x = voltas * self.osc_length / self.feed_x.max(1e-9);
+        let faixa = |a: f64, b: f64, tempo: f64| -> Vec<(f64, f64)> {
+            (0..BAND_SAMPLES)
+                .map(|i| {
+                    let t = (i as f64 + 0.5) / BAND_SAMPLES as f64;
+                    (a + (b - a) * t, tempo / BAND_SAMPLES as f64)
+                })
+                .collect()
+        };
+        let (lo, hi) = (fr.x_first.min(fr.x_last), fr.x_first.max(fr.x_last));
+        let bins = (((hi - lo) / SLOW_BIN_MM).ceil() as usize).max(1);
+        let bin = |x: f64| (((x - lo) / SLOW_BIN_MM) as usize).min(bins - 1);
+        let mut groups = vec![BandGroup::default(); bins];
+        let mut fixed = BandGroup::default();
+        for anel in 0..self.num_passos_axiais {
+            let (ida, volta) = self.ring_x(fr, anel);
+            if continuous {
+                for (x, t) in faixa(volta, ida, 2.0 * (perna_a + perna_x)) {
+                    groups[bin(x)].samples.push((x, t));
+                }
+            } else {
+                groups[bin(ida)].samples.push((ida, perna_a));
+                groups[bin(volta)].samples.push((volta, perna_a));
+                fixed.samples.extend(faixa(volta, ida, 2.0 * perna_x));
+            }
+        }
+        let factors = solve_band_factors(&groups, &fixed, lo, hi, fr.bead_width / 2.0);
+        self.slow = Some(SlowProfile { x0: lo, factors });
+    }
+
+    /// Quantas vezes mais devagar que o nominal em `x`.
+    fn slow_at(&self, x: f64) -> f64 {
+        self.slow.as_ref().map_or(1.0, |s| s.at(x))
+    }
+
+    /// Comentário da compensação, logo depois do fechamento uniforme.
+    fn push_slowdown_comment(&self, seg: &mut Vec<String>) {
+        let Some(slow) = &self.slow else {
+            return;
+        };
+        let maximo = slow.max();
+        seg.insert(
+            3,
+            format!("(COMPENSACAO DE ROTACAO: ate {maximo:.2} vezes mais lento nas pontas)"),
+        );
     }
 
     /// Defasagem angular entre camadas:
@@ -594,18 +692,19 @@ pub fn oscillation_closing(p: &Params) -> OscillationClosing {
 /// granularidade.
 fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let fr = LayerFrame::new(p, current_d);
-    let Some(g) = SquareGeom::new(p, &fr) else {
+    let Some(mut g) = SquareGeom::new(p, &fr) else {
         return vec![SQUARE_GEOM_ERROR.to_string()];
     };
+    g.plan_slowdown(p, &fr, false);
     let taxa_de_deposicao = p.taxa();
     let rotation_sign = fr.rotation_sign;
     let n = g.num_passos_axiais;
     let fx = f1(g.feed_x);
-    let fa = f1(g.feed_a);
 
     let mut seg = fr.segment_head(layer_num);
     if fr.closing {
         fr.push_closing_comment(&mut seg, g.actual_passo_axial, n);
+        g.push_slowdown_comment(&mut seg);
     }
     let mut current_a_total = g.stagger_a(layer_num, rotation_sign);
     let mut tail = WeldTail::at(fr.x_start, current_a_total);
@@ -655,16 +754,18 @@ fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
             }
         } else {
             let delta_a_half = rotation_sign * (g.actual_delta_a_deg / 2.0);
+            let fa_ida = f1(g.feed_a / g.slow_at(x_osc_ida));
+            let fa_volta = f1(g.feed_a / g.slow_at(x_osc_volta));
             for _ in 0..g.num_passos_angulares_por_volta {
                 // Ida (X, depois A).
                 let target_a_ida = current_a_total + delta_a_half;
                 seg.push(format!("G01 F{fx} X{}", f3(x_osc_ida)));
-                seg.push(format!("G01 F{fa} A{}", f3(target_a_ida)));
+                seg.push(format!("G01 F{fa_ida} A{}", f3(target_a_ida)));
                 current_a_total = target_a_ida;
                 // Volta (X, depois A).
                 let target_a_volta = current_a_total + delta_a_half;
                 seg.push(format!("G01 F{fx} X{}", f3(x_osc_volta)));
-                seg.push(format!("G01 F{fa} A{}", f3(target_a_volta)));
+                seg.push(format!("G01 F{fa_volta} A{}", f3(target_a_volta)));
                 tail.set(x_osc_volta, current_a_total, x_osc_volta, target_a_volta);
                 current_a_total = target_a_volta;
             }
@@ -685,7 +786,8 @@ fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
     }
 
     let tail = fr.closing_tail(tail);
-    let speeds = tail.torch_off_speeds(g.feed_x, g.feed_a, taxa_de_deposicao);
+    let speeds =
+        fr.square_tail_speeds(tail.torch_off_speeds(g.feed_x, g.feed_a, taxa_de_deposicao));
     fr.finish_segment(&mut seg, p, layer_num, &tail, speeds);
     seg
 }
@@ -736,7 +838,17 @@ impl Staircase {
             .min(RESERVE_CAP)
     }
 
-    fn emit(&self, seg: &mut Vec<String>, x0: f64, a0: f64, x1: f64, a1: f64) {
+    #[allow(clippy::too_many_arguments)]
+    fn emit(
+        &self,
+        seg: &mut Vec<String>,
+        x0: f64,
+        a0: f64,
+        x1: f64,
+        a1: f64,
+        slow: Option<&SlowProfile>,
+        feeds: (f64, f64),
+    ) {
         let dx = x1 - x0;
         let da = a1 - a0;
         let steps_x = sub_steps(dx, self.gran_x);
@@ -747,8 +859,16 @@ impl Staircase {
             let frac = i as f64 / s as f64;
             let xi = x0 + dx * frac;
             let ai = a0 + da * frac;
-            seg.push(motion_line(&self.x_prefix, xi));
-            seg.push(motion_line(&self.a_prefix, ai));
+            match slow.map(|s| s.at(xi)).filter(|f| *f > 1.0) {
+                Some(f) => {
+                    seg.push(motion_line(&format!("G01 F{} X", f1(feeds.0 / f)), xi));
+                    seg.push(motion_line(&format!("G01 F{} A", f1(feeds.1 / f)), ai));
+                }
+                None => {
+                    seg.push(motion_line(&self.x_prefix, xi));
+                    seg.push(motion_line(&self.a_prefix, ai));
+                }
+            }
         }
     }
 }
@@ -766,9 +886,10 @@ fn sub_steps(d: f64, gran: f64) -> i64 {
 /// independentes por eixo e lead-out desacelerado em dois trechos.
 fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let fr = LayerFrame::new(p, current_d);
-    let Some(g) = SquareGeom::new(p, &fr) else {
+    let Some(mut g) = SquareGeom::new(p, &fr) else {
         return vec![SQUARE_GEOM_ERROR.to_string()];
     };
+    g.plan_slowdown(p, &fr, true);
     let taxa_de_deposicao = p.taxa();
     let rotation_sign = fr.rotation_sign;
     let n = g.num_passos_axiais;
@@ -777,6 +898,7 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
     let mut seg = fr.segment_head(layer_num);
     if fr.closing {
         fr.push_closing_comment(&mut seg, g.actual_passo_axial, n);
+        g.push_slowdown_comment(&mut seg);
     }
     seg.reserve(stairs.estimate_lines(&g));
     // Stagger angular intercamadas.
@@ -834,7 +956,9 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
                 );
             }
         } else {
-            // Oscilação por passos angulares com decomposição em escada.
+            // Oscilação por passos angulares com decomposição em escada. Perto
+            // das pontas cada subpasso tem o F da sua posição em X.
+            let slow = g.slow.as_ref();
             let delta_a_half = rotation_sign * (g.actual_delta_a_deg / 2.0);
             for k in 0..g.num_passos_angulares_por_volta {
                 seg.push(format!(
@@ -850,6 +974,8 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
                     current_a_total,
                     x_osc_ida,
                     target_a_ida,
+                    slow,
+                    (g.feed_x, g.feed_a),
                 );
                 current_a_total = target_a_ida;
                 current_x_start_pos = x_osc_ida;
@@ -867,6 +993,8 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
                     current_a_total,
                     x_osc_volta,
                     target_a_volta,
+                    slow,
+                    (g.feed_x, g.feed_a),
                 );
                 current_a_total = target_a_volta;
                 current_x_start_pos = x_osc_volta;
@@ -898,7 +1026,8 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
     }
 
     let tail = fr.closing_tail(tail);
-    let speeds = tail.torch_off_speeds(g.feed_x, g.feed_a, taxa_de_deposicao);
+    let speeds =
+        fr.square_tail_speeds(tail.torch_off_speeds(g.feed_x, g.feed_a, taxa_de_deposicao));
     fr.finish_segment(&mut seg, p, layer_num, &tail, speeds);
     seg
 }

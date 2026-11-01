@@ -2,7 +2,7 @@
 //! `vazão × tempo`, então onde a máquina anda mais devagar ou repassa, a camada
 //! sobe mais. A compensação acelera a rotação onde o material acumula.
 
-use tfm_core::deposit::{flow_rate, simulate, DepositModel, MAX_FEED_FACTOR};
+use tfm_core::deposit::{flow_rate, simulate, DepositModel, DepositReport, MAX_FEED_FACTOR};
 use tfm_core::gcode::generate;
 use tfm_core::params::{Operation, Params};
 use tfm_core::toolpath::build_toolpath;
@@ -226,6 +226,133 @@ fn compensation_only_speeds_up_and_keeps_the_program_shape() {
         .expect("A");
     assert!((a - 3960.0).abs() < 0.05, "o anel deveria fechar: {tail}");
     assert_eq!(gcode_invariants(&lines, &p), Vec::<String>::new());
+}
+
+fn square(op: Operation, compensar_rotacao: bool) -> Params {
+    let mut p = Params::default();
+    p.apply_operation(op);
+    p.fechamento_uniforme = true;
+    p.compensar_rotacao = compensar_rotacao;
+    p
+}
+
+/// Simula `p` com a vazão do programa sem compensação, como o app faz: é o que
+/// mostra o material a mais.
+fn with_nominal_flow(p: &Params) -> DepositReport {
+    let nominal = Params {
+        compensar_rotacao: false,
+        ..p.clone()
+    };
+    let base = build_toolpath(&generate(&nominal).expect("gera"), &nominal);
+    let q = flow_rate(&base, &nominal);
+    let tp = build_toolpath(&generate(p).expect("gera"), p);
+    simulate(&tp, p, q).expect("simula").report
+}
+
+#[test]
+fn slowing_the_ends_fills_the_square_oscillations() {
+    // Na contínua a borda precisaria de 4 vezes para chegar ao platô e para no
+    // teto de 2,5, então o sobremetal cai menos que na sequencial.
+    for (op, ganho) in [
+        (Operation::OscilacaoQuadrada, 0.7),
+        (Operation::OscilacaoQuadradaContinua, 0.85),
+    ] {
+        let base = with_nominal_flow(&square(op, false));
+        let comp = with_nominal_flow(&square(op, true));
+        assert!(
+            comp.min_mm > 1.6 * base.min_mm,
+            "{op:?}: a ponta deveria subir: {} vs {}",
+            comp.min_mm,
+            base.min_mm
+        );
+        assert!(
+            comp.sobremetal_mm < ganho * base.sobremetal_mm,
+            "{op:?}: sobremetal {} vs {}",
+            comp.sobremetal_mm,
+            base.sobremetal_mm
+        );
+        // O calombo do apagamento agora cai sobre a ponta já cheia, e não sobre
+        // a rampa de antes: a margem é para ele, não para o platô.
+        assert!(
+            comp.max_mm < base.max_mm * 1.12,
+            "{op:?}: o meio não deveria subir: {} vs {}",
+            comp.max_mm,
+            base.max_mm
+        );
+        assert!(
+            comp.weld_min > base.weld_min,
+            "{op:?}: {comp:?} vs {base:?}"
+        );
+        assert!(comp.volume_mm3 > base.volume_mm3, "{op:?}");
+    }
+}
+
+#[test]
+fn slowing_only_lowers_feeds_and_keeps_every_position() {
+    for op in [
+        Operation::OscilacaoQuadrada,
+        Operation::OscilacaoQuadradaContinua,
+    ] {
+        let nominal = generate(&square(op, false)).expect("gera");
+        let p = square(op, true);
+        let lines = generate(&p).expect("gera");
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.starts_with("(COMPENSACAO DE ROTACAO")),
+            "{op:?}: comentário ausente"
+        );
+        let sem_comentario: Vec<&String> = lines
+            .iter()
+            .filter(|l| !l.starts_with("(COMPENSACAO"))
+            .collect();
+        assert_eq!(sem_comentario.len(), nominal.len(), "{op:?}: linhas");
+        let posicao = |l: &str| {
+            l.split_whitespace()
+                .filter(|w| !w.starts_with('F'))
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        let (mut mudou, mut f_max, mut f_min) = (0, 0.0_f64, f64::MAX);
+        for (a, b) in sem_comentario.iter().zip(&nominal) {
+            if a.contains("(Data:") {
+                continue;
+            }
+            assert_eq!(posicao(a), posicao(b), "{op:?}: posição mudou");
+            let feed = |l: &str| -> Option<f64> {
+                l.split_whitespace().nth(1)?.strip_prefix('F')?.parse().ok()
+            };
+            if let (Some(fa), Some(fb)) = (feed(a), feed(b)) {
+                assert!(fa <= fb + 1e-9, "{op:?}: acelerou: {a} vs {b}");
+                if fa < fb {
+                    mudou += 1;
+                    f_max = f_max.max(fb / fa);
+                }
+                f_min = f_min.min(fa / fb);
+            }
+        }
+        assert!(mudou > 0, "{op:?}: nenhum F mudou");
+        assert!(f_max <= MAX_FEED_FACTOR + 0.02, "{op:?}: {f_max}");
+        assert_eq!(gcode_invariants(&lines, &p), Vec::<String>::new());
+    }
+}
+
+#[test]
+fn compensation_needs_the_edges_and_skips_the_flat_linear() {
+    // Sem as bordas não existe a banda inteira para calcular.
+    let mut p = Params::default();
+    p.apply_operation(Operation::OscilacaoQuadrada);
+    p.compensar_rotacao = true;
+    assert!(!generate(&p)
+        .expect("gera")
+        .iter()
+        .any(|l| l.starts_with("(COMPENSACAO")));
+    // A linear já fica plana: não há o que compensar.
+    let p = square(Operation::OscilacaoLinear, true);
+    assert!(!generate(&p)
+        .expect("gera")
+        .iter()
+        .any(|l| l.starts_with("(COMPENSACAO")));
 }
 
 #[test]

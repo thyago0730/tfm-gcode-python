@@ -152,20 +152,26 @@ pub fn compute_all(params: Params, cfg: &AppConfig, key: u64) -> ComputeResult {
 }
 
 /// Simula o depósito do programa. Com a compensação ligada, simula também o
-/// programa sem ela e com a mesma vazão, para comparar.
+/// programa sem ela. A vazão é sempre a do programa sem compensação: é a que a
+/// máquina tem, e só assim o material a mais ou a menos aparece nos números.
 fn deposit_model(p: &Params, tp: &Toolpath) -> Option<Arc<DepositModel>> {
-    let q = deposit::flow_rate(tp, p);
+    let nominal = Params {
+        compensar_rotacao: false,
+        ..p.clone()
+    };
+    let base = p
+        .compensar_rotacao
+        .then(|| gcode::generate(&nominal).ok())
+        .flatten()
+        .map(|lines| toolpath::build_toolpath(&lines, &nominal));
+    let q = match &base {
+        Some(b) => deposit::flow_rate(b, &nominal),
+        None => deposit::flow_rate(tp, p),
+    };
     let mut model = deposit::simulate(tp, p, q)?;
-    if p.compensar_rotacao {
-        let nominal = Params {
-            compensar_rotacao: false,
-            ..p.clone()
-        };
-        if let Ok(lines) = gcode::generate(&nominal) {
-            let base = toolpath::build_toolpath(&lines, &nominal);
-            model.base = deposit::simulate(&base, &nominal, q).map(|m| m.report);
-        }
-    }
+    model.base = base
+        .and_then(|b| deposit::simulate(&b, &nominal, q))
+        .map(|m| m.report);
     Some(Arc::new(model))
 }
 

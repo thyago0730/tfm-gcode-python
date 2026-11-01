@@ -39,6 +39,16 @@ const SOLVER_GAIN: f64 = 0.5;
 const SOLVER_UNDER_WEIGHT: f32 = 3.0;
 /// Fator abaixo disto conta como rotação nominal.
 const SOLVER_SNAP: f64 = 1.02;
+/// Célula do cálculo por faixas em X (mm).
+const BAND_CELL_MM: f64 = 0.5;
+/// Rodadas do cálculo por faixas em X.
+const BAND_ROUNDS: usize = 120;
+/// Fração da correção por rodada no cálculo por faixas em X.
+const BAND_GAIN: f64 = 0.15;
+/// Quanto a falta de material pesa mais que o excesso no cálculo por faixas.
+/// A borda chega ao teto de desaceleração antes de encher, e um peso alto só
+/// empurra as faixas vizinhas para cima do alvo.
+const BAND_UNDER_WEIGHT: f64 = 1.0;
 /// Área com altura abaixo desta fração da média conta como sem material.
 const UNCOVERED_FRACTION: f32 = 0.1;
 
@@ -473,4 +483,99 @@ fn smooth(values: &[f64]) -> Vec<f64> {
             values[lo..=hi].iter().sum::<f64>() / (hi - lo + 1) as f64
         })
         .collect()
+}
+
+/// Material que um grupo de trechos deposita ao longo de X, em `(x, tempo)`.
+/// Vale para peças em que cada anel é igual ao longo da volta: a altura só
+/// depende de X, e a conta cabe em uma dimensão.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct BandGroup {
+    pub samples: Vec<(f64, f64)>,
+}
+
+/// Quanto desacelerar cada grupo para encher as pontas até o platô: fator de
+/// tempo em `1.0..=MAX_FEED_FACTOR`. Só desacelera. `fixed` é o material que
+/// não muda, e `x_lo..x_hi` é a faixa do centro do cordão. O alvo é a altura do
+/// terço do meio da faixa, sem compensação.
+pub fn solve_band_factors(
+    groups: &[BandGroup],
+    fixed: &BandGroup,
+    x_lo: f64,
+    x_hi: f64,
+    bead_radius: f64,
+) -> Vec<f64> {
+    let r = bead_radius.max(BAND_CELL_MM);
+    let columns = (((x_hi - x_lo) + 2.0 * r) / BAND_CELL_MM).ceil() as usize + 1;
+    let x_of = |ix: usize| x_lo - r + ix as f64 * BAND_CELL_MM;
+    let profile = |g: &BandGroup| -> Vec<f64> {
+        let mut out = vec![0.0; columns];
+        for &(x, time) in &g.samples {
+            let raw: Vec<f64> = (0..columns)
+                .map(|ix| {
+                    let u = (x_of(ix) - x) / r;
+                    (1.0 - u * u).max(0.0).powf(1.5)
+                })
+                .collect();
+            let total: f64 = raw.iter().sum();
+            if total > 0.0 {
+                for (o, k) in out.iter_mut().zip(&raw) {
+                    *o += time * k / total;
+                }
+            }
+        }
+        out
+    };
+    let shapes: Vec<Vec<f64>> = groups.iter().map(profile).collect();
+    let base = profile(fixed);
+    let height = |factors: &[f64]| -> Vec<f64> {
+        let mut h = base.clone();
+        for (shape, f) in shapes.iter().zip(factors) {
+            for (a, b) in h.iter_mut().zip(shape) {
+                *a += b * f;
+            }
+        }
+        h
+    };
+    let inside = |ix: usize| (x_lo..=x_hi).contains(&x_of(ix));
+
+    let mut factors = vec![1.0; groups.len()];
+    let start = height(&factors);
+    let mut middle: Vec<f64> = (0..columns)
+        .filter(|&ix| {
+            let x = x_of(ix);
+            let third = (x_hi - x_lo) / 3.0;
+            x >= x_lo + third && x <= x_hi - third
+        })
+        .map(|ix| start[ix])
+        .collect();
+    middle.sort_by(f64::total_cmp);
+    let Some(&target) = middle.get(middle.len() / 2).filter(|t| **t > 0.0) else {
+        return factors;
+    };
+    for _ in 0..BAND_ROUNDS {
+        let h = height(&factors);
+        for (shape, f) in shapes.iter().zip(factors.iter_mut()) {
+            let (mut sum, mut total) = (0.0, 0.0);
+            for ix in (0..columns).filter(|&ix| inside(ix)) {
+                let diff = h[ix] - target;
+                let weighted = if diff < 0.0 {
+                    diff * BAND_UNDER_WEIGHT
+                } else {
+                    diff
+                };
+                sum += weighted * shape[ix];
+                total += shape[ix];
+            }
+            if total > 0.0 {
+                let correction = BAND_GAIN * sum / total / target;
+                *f = (*f * (1.0 - correction)).clamp(1.0, MAX_FEED_FACTOR);
+            }
+        }
+    }
+    for f in &mut factors {
+        if *f < SOLVER_SNAP {
+            *f = 1.0;
+        }
+    }
+    factors
 }
