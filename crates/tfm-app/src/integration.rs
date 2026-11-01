@@ -7,10 +7,13 @@
 //! (`validate_physical` -> ISO 3834 -> geração -> diálogo de arquivo).
 //!
 //! O alerta de segurança G53 era um `messagebox.askyesno`; aqui ele precisa
-//! sobreviver a vários quadros, então a gravação pendente fica em
-//! [`IntegrationState::pending_save`] (campo `integration` do `TfmApp`) e o
-//! modal é desenhado por [`show_modals`] a cada quadro. Os macros do Mach3
-//! (`_ensure_mach3_macros`) são [`mach3_path::install_macros`], reutilizado.
+//! sobreviver a vários quadros, então a ação pendente (gravar o `.tap` ou
+//! abrir no Mach3) fica em [`IntegrationState::pending`] (campo `integration`
+//! do `TfmApp`) e o modal é desenhado por [`show_modals`] a cada quadro.
+//! "Abrir no Mach3" passa pelos mesmos bloqueios de "Gerar G-code" (campos,
+//! física, ISO 3834 e o alerta G53) e também registra auditoria. Os macros do
+//! Mach3 (`_ensure_mach3_macros`) são [`mach3_path::install_macros`],
+//! reutilizado.
 //!
 //! Nada aqui bloqueia a interface além dos diálogos nativos de arquivo: a
 //! regravação atrasada do `autoload.txt` e o fallback de associação de
@@ -19,6 +22,7 @@
 use std::ffi::OsString;
 use std::fs;
 use std::io;
+use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
@@ -27,7 +31,7 @@ use std::time::Duration;
 use chrono::NaiveDateTime;
 use egui::{Key, Modifiers};
 use tfm_core::config::Integration;
-use tfm_core::gcode;
+use tfm_core::gcode::{self, GenError};
 use tfm_core::params::Params;
 use tfm_core::procedure::{load_procedure, save_procedure};
 use tfm_core::validator::validate_physical;
@@ -50,6 +54,12 @@ Se não estiver, pode haver COLISÃO.\n\
 Deseja continuar?";
 /// Categoria do log de auditoria da geração manual.
 pub const AUDIT_CATEGORY: &str = "GCode Generation (Manual)";
+/// Categoria do log de auditoria de "Abrir no Mach3".
+pub const AUDIT_CATEGORY_MACH3: &str = "GCode Generation (Mach3)";
+/// Aviso quando o trabalhador ainda calcula estes parâmetros.
+pub const BUSY_MESSAGE: &str = "Aguarde o cálculo terminar e tente de novo.";
+/// Erro quando a geração síncrona entra em pânico.
+pub const INTERNAL_ERROR: &str = "Falha interna ao gerar o G-code";
 /// Filtro dos diálogos de procedimento (`("TFM Procedure Files", "*.json")`).
 const PROCEDURE_FILTER: &str = "TFM Procedure Files";
 /// Atraso até regravar o `autoload.txt` depois de iniciar o Mach3
@@ -62,20 +72,35 @@ const ASSOCIATION_DELAY: Duration = Duration::from_secs(3);
 // Estado entre quadros
 // ---------------------------------------------------------------------------
 
-/// Gravação do `.tap` à espera da resposta ao alerta G53.
+/// Ação à espera da resposta ao alerta G53. Em ambas, `text` é o programa
+/// completo (linhas unidas por `\n`) e `params` os parâmetros usados (EPS e
+/// operador vão para o log de auditoria).
 #[derive(Clone, Debug, PartialEq)]
-pub struct PendingSave {
-    pub path: PathBuf,
-    /// Texto completo do programa (linhas unidas por `\n`).
-    pub text: String,
-    /// Parâmetros usados (EPS e operador vão para o log de auditoria).
-    pub params: Params,
+pub enum PendingAction {
+    /// "Gerar G-code": gravar o `.tap` no caminho escolhido no diálogo.
+    SaveTap {
+        path: PathBuf,
+        text: String,
+        params: Params,
+    },
+    /// "Abrir no Mach3": gravar `TFM_<data>_<hora>.tap` e iniciar o Mach3.
+    OpenMach3 { text: String, params: Params },
+}
+
+impl PendingAction {
+    /// Aviso de cancelamento ("Não", Esc ou clique fora do modal).
+    fn cancel_message(&self) -> &'static str {
+        match self {
+            PendingAction::SaveTap { .. } => "Geração cancelada.",
+            PendingAction::OpenMach3 { .. } => "Abertura no Mach3 cancelada.",
+        }
+    }
 }
 
 /// Estado das ações que atravessam quadros (campo `integration` do `TfmApp`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct IntegrationState {
-    pub pending_save: Option<PendingSave>,
+    pub pending: Option<PendingAction>,
 }
 
 // ---------------------------------------------------------------------------
@@ -92,12 +117,36 @@ pub fn uses_g53(text: &str) -> bool {
     text.contains("G53")
 }
 
-/// Grava texto UTF-8 com quebras `\n`, criando a pasta pai se preciso.
+/// Fim de linha do `.tap`: CRLF no Windows (como o Python gravava lá), LF
+/// nos demais sistemas.
+pub fn tap_line_ending() -> &'static str {
+    if cfg!(windows) {
+        "\r\n"
+    } else {
+        "\n"
+    }
+}
+
+/// Texto do `.tap` como vai para o disco: `text` com quebras `\n`
+/// convertidas para [`tap_line_ending`].
+pub fn tap_text(text: &str) -> String {
+    let ending = tap_line_ending();
+    if ending == "\n" {
+        text.to_string()
+    } else {
+        text.replace('\n', ending)
+    }
+}
+
+/// Grava o `.tap` em UTF-8 com o fim de linha do sistema
+/// ([`tap_line_ending`]), criando a pasta pai se preciso. Só o `.tap` passa
+/// por aqui: procedimentos JSON e `autoload.txt` têm os seus próprios
+/// gravadores.
 pub fn write_text(path: &Path, text: &str) -> io::Result<()> {
     if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, text.as_bytes())
+    fs::write(path, tap_text(text).as_bytes())
 }
 
 /// `TFM_AAAAMMDD_HHMMSS.tap` (`_open_in_mach3_clicked`).
@@ -308,23 +357,52 @@ fn schedule_open_with_association(file: PathBuf, delay: Duration) {
 // G-code atual
 // ---------------------------------------------------------------------------
 
+/// Geração síncrona protegida: um pânico do motor vira [`INTERNAL_ERROR`]
+/// em vez de derrubar a interface; `Err` já é a mensagem para o usuário.
+fn generate_guarded(
+    generate: impl FnOnce() -> Result<Vec<String>, GenError>,
+) -> Result<Vec<String>, String> {
+    let outcome = panic::catch_unwind(AssertUnwindSafe(generate));
+    let lines = match outcome {
+        Ok(Ok(lines)) => lines,
+        Ok(Err(err)) => return Err(format!("Erro ao gerar G-Code: {err}")),
+        Err(_) => {
+            log::error!("Pânico na geração síncrona do G-code");
+            return Err(INTERNAL_ERROR.to_string());
+        }
+    };
+    if lines.is_empty() {
+        return Err("Erro ao gerar G-Code.".to_string());
+    }
+    Ok(lines)
+}
+
 /// Linhas do G-code para `params`: reaproveita o resultado do trabalhador
-/// quando ele é destes mesmos parâmetros (e deu certo); senão gera agora.
-/// `Err` já é a mensagem para o usuário.
-fn current_gcode(app: &TfmApp, params: &Params) -> Result<Vec<String>, String> {
+/// quando ele é destes mesmos parâmetros (e deu certo). Se o trabalhador
+/// ainda está calculando (resultado defasado), avisa e devolve `None` em vez
+/// de gerar na thread da interface; ocioso, gera agora, protegido contra
+/// pânico. Qualquer falha já foi notificada quando devolve `None`.
+fn current_gcode(app: &mut TfmApp, params: &Params) -> Option<Vec<String>> {
     let key = params_key(params, &app.cfg);
     let cached = app
         .result
         .as_ref()
         .filter(|r| r.key == key && r.gen_error.is_none() && !r.lines.is_empty());
     if let Some(result) = cached {
-        return Ok(result.lines.clone());
+        return Some(result.lines.clone());
     }
-    let lines = gcode::generate(params).map_err(|err| format!("Erro ao gerar G-Code: {err}"))?;
-    if lines.is_empty() {
-        return Err("Erro ao gerar G-Code.".to_string());
+    if app.compute.busy() {
+        log::info!("Ação adiada: cálculo {key:#018x} ainda em andamento");
+        app.notify(NotifyKind::Aviso, BUSY_MESSAGE);
+        return None;
     }
-    Ok(lines)
+    match generate_guarded(|| gcode::generate(params)) {
+        Ok(lines) => Some(lines),
+        Err(message) => {
+            app.notify(NotifyKind::Erro, message);
+            None
+        }
+    }
 }
 
 /// Primeiro portão do Python: `_get_current_params()` devolvia `None` quando
@@ -341,6 +419,29 @@ fn fields_ok(app: &mut TfmApp) -> bool {
     false
 }
 
+/// Os três bloqueios comuns a "Gerar G-code" e "Abrir no Mach3", na ordem do
+/// Python: campos que convertem, regras físicas (`validate_physical`) e ISO
+/// 3834. Devolve os parâmetros liberados; `None` já foi notificado.
+fn validated_params(app: &mut TfmApp) -> Option<Params> {
+    if !fields_ok(app) {
+        return None;
+    }
+    let params = app.current_params();
+    let errors = validate_physical(&params).errors;
+    if !errors.is_empty() {
+        app.notify(
+            NotifyKind::Erro,
+            format!("ERRO DE PARÂMETROS:\n{}", errors.join("\n")),
+        );
+        return None;
+    }
+    if let Err(message) = app.quality.validate_iso3834(&params) {
+        app.notify(NotifyKind::Erro, message);
+        return None;
+    }
+    Some(params)
+}
+
 // ---------------------------------------------------------------------------
 // Gerar G-code (.tap)
 // ---------------------------------------------------------------------------
@@ -350,30 +451,11 @@ fn fields_ok(app: &mut TfmApp) -> bool {
 /// 3834), gera, pede o arquivo e grava — ou deixa a gravação pendente do
 /// alerta G53 ([`show_modals`]).
 pub fn generate_tap(app: &mut TfmApp) {
-    if !fields_ok(app) {
+    let Some(params) = validated_params(app) else {
         return;
-    }
-    let params = app.current_params();
-
-    let errors = validate_physical(&params).errors;
-    if !errors.is_empty() {
-        app.notify(
-            NotifyKind::Erro,
-            format!("ERRO DE PARÂMETROS:\n{}", errors.join("\n")),
-        );
+    };
+    let Some(lines) = current_gcode(app, &params) else {
         return;
-    }
-    if let Err(message) = app.quality.validate_iso3834(&params) {
-        app.notify(NotifyKind::Erro, message);
-        return;
-    }
-
-    let lines = match current_gcode(app, &params) {
-        Ok(lines) => lines,
-        Err(message) => {
-            app.notify(NotifyKind::Erro, message);
-            return;
-        }
     };
     let text = join_lines(&lines);
 
@@ -385,23 +467,39 @@ pub fn generate_tap(app: &mut TfmApp) {
     else {
         return;
     };
-    let pending = PendingSave {
+    let action = PendingAction::SaveTap {
         path: with_default_extension(path, "tap"),
         text,
         params,
     };
-    if uses_g53(&pending.text) {
-        app.integration.pending_save = Some(pending);
+    run_or_confirm(app, action);
+}
+
+/// Executa a ação, ou a deixa pendente do alerta G53 quando o programa usa
+/// G53 ([`show_modals`] executa no "Sim").
+fn run_or_confirm(app: &mut TfmApp, action: PendingAction) {
+    let text = match &action {
+        PendingAction::SaveTap { text, .. } | PendingAction::OpenMach3 { text, .. } => text,
+    };
+    if uses_g53(text) {
+        app.integration.pending = Some(action);
     } else {
-        commit_save(app, pending);
+        run_action(app, action);
+    }
+}
+
+/// Executa uma ação já liberada (sem G53, ou G53 confirmado).
+fn run_action(app: &mut TfmApp, action: PendingAction) {
+    match action {
+        PendingAction::SaveTap { path, text, params } => commit_save(app, path, &text, &params),
+        PendingAction::OpenMach3 { text, params } => launch_mach3(app, &text, &params),
     }
 }
 
 /// Grava o `.tap`, avisa e registra na auditoria (ou avisa o erro crítico,
 /// registrando-o como o Python).
-fn commit_save(app: &mut TfmApp, pending: PendingSave) {
-    let PendingSave { path, text, params } = pending;
-    match write_text(&path, &text) {
+fn commit_save(app: &mut TfmApp, path: PathBuf, text: &str, params: &Params) {
+    match write_text(&path, text) {
         Ok(()) => {
             log::info!("G-code gravado em {}", path.display());
             app.notify(NotifyKind::Sucesso, "Arquivo G-Code gerado com sucesso!");
@@ -430,10 +528,11 @@ fn commit_save(app: &mut TfmApp, pending: PendingSave) {
     }
 }
 
-/// Desenha o alerta G53 enquanto há gravação pendente. "Sim" grava; "Não",
-/// Esc ou clicar fora cancelam ("Geração cancelada.").
+/// Desenha o alerta G53 enquanto há ação pendente. "Sim" executa (grava o
+/// `.tap` ou abre no Mach3); "Não", Esc ou clicar fora cancelam ("Geração
+/// cancelada." / "Abertura no Mach3 cancelada.").
 pub fn show_modals(app: &mut TfmApp, ctx: &egui::Context) {
-    if app.integration.pending_save.is_none() {
+    if app.integration.pending.is_none() {
         return;
     }
     let mut decision: Option<bool> = None;
@@ -459,13 +558,14 @@ pub fn show_modals(app: &mut TfmApp, ctx: &egui::Context) {
     }
     match decision {
         Some(true) => {
-            if let Some(pending) = app.integration.pending_save.take() {
-                commit_save(app, pending);
+            if let Some(action) = app.integration.pending.take() {
+                run_action(app, action);
             }
         }
         Some(false) => {
-            app.integration.pending_save = None;
-            app.notify(NotifyKind::Info, "Geração cancelada.");
+            if let Some(action) = app.integration.pending.take() {
+                app.notify(NotifyKind::Info, action.cancel_message());
+            }
         }
         None => {}
     }
@@ -475,23 +575,25 @@ pub fn show_modals(app: &mut TfmApp, ctx: &egui::Context) {
 // Abrir no Mach3
 // ---------------------------------------------------------------------------
 
-/// Botão/menu "Abrir no Mach3" e Ctrl+M: porta de `_open_in_mach3_clicked`.
-/// Grava `TFM_<data>_<hora>.tap` na pasta de G-code (ou `~/Mach3/GCode`),
-/// o `autoload.txt` (se ligado), garante os macros e inicia o
-/// `Mach3.exe /p <perfil> <arquivo>` com a pasta do Mach3 como `cwd`.
+/// Botão/menu "Abrir no Mach3" e Ctrl+M: porta de `_open_in_mach3_clicked`
+/// com os mesmos bloqueios de [`generate_tap`] (campos, física, ISO 3834 e
+/// o alerta G53). Liberado, [`launch_mach3`] grava e inicia o Mach3.
 pub fn open_in_mach3(app: &mut TfmApp) {
-    if !fields_ok(app) {
+    let Some(params) = validated_params(app) else {
         return;
-    }
-    let params = app.current_params();
-    let lines = match current_gcode(app, &params) {
-        Ok(lines) => lines,
-        Err(message) => {
-            app.notify(NotifyKind::Erro, message);
-            return;
-        }
+    };
+    let Some(lines) = current_gcode(app, &params) else {
+        return;
     };
     let text = join_lines(&lines);
+    run_or_confirm(app, PendingAction::OpenMach3 { text, params });
+}
+
+/// Grava `TFM_<data>_<hora>.tap` na pasta de G-code (ou `~/Mach3/GCode`),
+/// registra na auditoria, grava o `autoload.txt` (se ligado), garante os
+/// macros e inicia o `Mach3.exe /p <perfil> <arquivo>` com a pasta do Mach3
+/// como `cwd`.
+fn launch_mach3(app: &mut TfmApp, text: &str, params: &Params) {
     let integration = app.cfg.integration.clone();
 
     let base_dir = match gcode_dir_with_fallback(&integration) {
@@ -505,7 +607,7 @@ pub fn open_in_mach3(app: &mut TfmApp) {
         }
     };
     let filepath = base_dir.join(tap_filename(&chrono::Local::now().naive_local()));
-    if let Err(err) = write_text(&filepath, &text) {
+    if let Err(err) = write_text(&filepath, text) {
         app.notify(
             NotifyKind::Erro,
             format!("Erro ao salvar G-Code para Mach3: {err}"),
@@ -513,6 +615,16 @@ pub fn open_in_mach3(app: &mut TfmApp) {
         return;
     }
     log::info!("G-code para o Mach3 gravado em {}", filepath.display());
+    let detail = audit_detail(
+        &file_name(&filepath),
+        &params.traceability_eps,
+        &params.traceability_operator,
+    );
+    app.audit.log(
+        AUDIT_CATEGORY_MACH3,
+        &detail,
+        audit_user(&params.traceability_operator),
+    );
     if integration.write_autoload_txt {
         if let Err(err) = write_autoload(&base_dir, &filepath) {
             log::warn!("autoload.txt não gravado em {}: {err}", base_dir.display());
@@ -806,7 +918,7 @@ fn poll_shortcut(input: &mut egui::InputState, focused: bool) -> Option<Shortcut
 /// Chamado uma vez por quadro, antes dos painéis. Com o alerta G53 aberto
 /// as teclas ficam para o modal.
 pub fn handle_shortcuts(app: &mut TfmApp, ctx: &egui::Context) {
-    if app.integration.pending_save.is_some() {
+    if app.integration.pending.is_some() {
         return;
     }
     let focused = ctx.memory(|m| m.focused().is_some());
@@ -902,9 +1014,10 @@ mod tests {
         assert!(!uses_g53("G90\nG0 Z5\nM30"));
     }
 
-    /// O `.tap` sai em UTF-8 só com `\n`, criando a pasta se preciso.
+    /// O `.tap` sai em UTF-8 com CRLF no Windows (como o Python gravava lá)
+    /// e LF nos demais sistemas, criando a pasta se preciso.
     #[test]
-    fn write_text_is_utf8_with_lf_only() {
+    fn write_text_uses_crlf_on_windows_and_lf_elsewhere() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let path = tmp.path().join("sub").join("programa.tap");
         let lines = vec![
@@ -913,10 +1026,155 @@ mod tests {
             "M30".to_string(),
         ];
         let text = join_lines(&lines);
+        assert_eq!(text, "(TFM – Revestimento)\nG21\nM30", "join só com LF");
         write_text(&path, &text).expect("grava");
         let bytes = fs::read(&path).expect("lê");
-        assert_eq!(bytes, "(TFM – Revestimento)\nG21\nM30".as_bytes());
-        assert!(!bytes.contains(&b'\r'));
+        let expected = if cfg!(windows) {
+            "(TFM – Revestimento)\r\nG21\r\nM30"
+        } else {
+            "(TFM – Revestimento)\nG21\nM30"
+        };
+        assert_eq!(bytes, expected.as_bytes());
+        assert_eq!(tap_text(&text), expected);
+        assert_eq!(tap_line_ending(), if cfg!(windows) { "\r\n" } else { "\n" });
+        // Nunca duplica o CR: cada `\n` vira exatamente um fim de linha.
+        assert_eq!(
+            tap_text(&text).matches('\n').count(),
+            2,
+            "três linhas = duas quebras"
+        );
+    }
+
+    /// A geração síncrona é protegida: pânico vira [`INTERNAL_ERROR`], erro
+    /// do motor vira "Erro ao gerar G-Code: …", programa vazio é erro, e o
+    /// caminho normal devolve as linhas.
+    #[test]
+    fn generate_guarded_maps_panic_and_errors() {
+        let err = generate_guarded(|| panic!("motor explodiu")).expect_err("pânico vira Err");
+        assert_eq!(err, INTERNAL_ERROR);
+        let err = generate_guarded(|| Err(GenError::Invalid("x".to_string())))
+            .expect_err("erro do motor vira Err");
+        assert!(err.starts_with("Erro ao gerar G-Code: "), "{err}");
+        assert_eq!(
+            generate_guarded(|| Ok(Vec::new())).expect_err("vazio é erro"),
+            "Erro ao gerar G-Code."
+        );
+        let lines = generate_guarded(|| gcode::generate(&Params::default())).expect("padrão gera");
+        assert!(lines.len() > 20, "veio só {} linhas", lines.len());
+    }
+
+    /// Com o trabalhador ocupado e sem resultado destes parâmetros, a ação
+    /// não gera na thread da interface: avisa [`BUSY_MESSAGE`] e devolve
+    /// `None`. Ocioso, gera na hora.
+    #[test]
+    fn current_gcode_waits_for_busy_worker() {
+        use crate::compute::{compute_all, ComputeHandle, JobRunner};
+        use std::sync::Arc;
+        use tfm_core::config::AppConfig;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = TfmApp::headless(tmp.path());
+        let params = app.current_params();
+        let lines = current_gcode(&mut app, &params).expect("ocioso gera na hora");
+        assert!(lines.len() > 20);
+        assert!(app.notifications.is_empty(), "sem aviso quando ocioso");
+
+        // Trabalhador que demora: qualquer pedido o deixa ocupado por 2 s.
+        let slow: JobRunner = Arc::new(
+            |params: Params, cfg: &AppConfig, key: u64| -> crate::compute::ComputeResult {
+                thread::sleep(Duration::from_secs(2));
+                compute_all(params, cfg, key)
+            },
+        );
+        app.compute = ComputeHandle::with_runner(egui::Context::default(), slow);
+        let mut other = params.clone();
+        other.comprimento_revestir += 5.0;
+        let other_key = params_key(&other, &app.cfg);
+        app.compute.request(other, app.cfg.clone(), other_key);
+        assert!(app.compute.busy());
+        assert!(current_gcode(&mut app, &params).is_none());
+        let last = app.notifications.last().expect("aviso registrado");
+        assert_eq!(last.kind, NotifyKind::Aviso);
+        assert_eq!(last.text, BUSY_MESSAGE);
+    }
+
+    /// Operador com qualificação vencida (QualityManager em pasta
+    /// temporária): "Abrir no Mach3" e "Gerar G-code" são bloqueados pelo
+    /// ISO 3834 antes de gravar qualquer arquivo ou abrir o alerta G53.
+    #[test]
+    fn open_in_mach3_is_blocked_by_iso3834_like_generate_tap() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = TfmApp::headless(tmp.path());
+        app.quality.add_operator("Ana", "OP-1", "Q-1", "2000-01-01");
+        assert!(
+            app.quality.operators_path().is_file(),
+            "operators.json gravado na pasta temporária"
+        );
+        app.ui
+            .fields
+            .insert("traceability_operator", "Ana".to_string());
+        let gcode_dir = tmp.path().join("gcode");
+        app.cfg.integration.gcode_dir = gcode_dir.display().to_string();
+
+        open_in_mach3(&mut app);
+        let last = app.notifications.last().expect("erro registrado");
+        assert_eq!(last.kind, NotifyKind::Erro);
+        assert!(
+            last.text
+                .starts_with("BLOQUEIO ISO 3834: Qualificação do operador 'Ana' vencida"),
+            "{}",
+            last.text
+        );
+        assert!(app.integration.pending.is_none(), "nada pendente do G53");
+        assert!(!gcode_dir.exists(), "nenhum .tap gravado");
+
+        generate_tap(&mut app);
+        let last = app.notifications.last().expect("erro registrado");
+        assert_eq!(last.kind, NotifyKind::Erro);
+        assert!(last.text.starts_with("BLOQUEIO ISO 3834"), "{}", last.text);
+        assert_eq!(app.notifications.len(), 2, "um erro por ação");
+    }
+
+    /// Regra física violada bloqueia "Abrir no Mach3" com a mesma mensagem
+    /// "ERRO DE PARÂMETROS:" de "Gerar G-code"; campo que não converte, com
+    /// "Por favor, verifique os parâmetros.".
+    #[test]
+    fn open_in_mach3_is_blocked_by_physical_rules_and_bad_fields() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = TfmApp::headless(tmp.path());
+        app.ui.fields.insert("diametro", "0".to_string());
+        open_in_mach3(&mut app);
+        let last = app.notifications.last().expect("erro registrado");
+        assert_eq!(last.kind, NotifyKind::Erro);
+        assert!(
+            last.text.starts_with("ERRO DE PARÂMETROS:\n"),
+            "{}",
+            last.text
+        );
+
+        app.ui.fields.insert("diametro", "abc".to_string());
+        open_in_mach3(&mut app);
+        let last = app.notifications.last().expect("erro registrado");
+        assert_eq!(last.kind, NotifyKind::Erro);
+        assert_eq!(last.text, "Por favor, verifique os parâmetros.");
+        assert!(app.integration.pending.is_none());
+    }
+
+    /// "Não" no alerta G53 cancela com a mensagem da ação pendente.
+    #[test]
+    fn pending_action_cancel_messages() {
+        let save = PendingAction::SaveTap {
+            path: PathBuf::from("peca.tap"),
+            text: "G53".to_string(),
+            params: Params::default(),
+        };
+        assert_eq!(save.cancel_message(), "Geração cancelada.");
+        let open = PendingAction::OpenMach3 {
+            text: "G53".to_string(),
+            params: Params::default(),
+        };
+        assert_eq!(open.cancel_message(), "Abertura no Mach3 cancelada.");
+        assert_eq!(AUDIT_CATEGORY_MACH3, "GCode Generation (Mach3)");
     }
 
     /// `defaultextension` do Tkinter: só completa quando falta extensão.

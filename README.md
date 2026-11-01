@@ -69,7 +69,7 @@ Os caminhos são relativos à **raiz do aplicativo**: a raiz do repositório em 
 - **"Camadas Inteligentes" agora funciona.** No Python a caixa existia, mas `_get_current_params` não copiava `smart_layers`/`root_feed_scale`, então ela não tinha efeito. No Rust o valor chega ao gerador e a camada de raiz usa o "% Vel. Raiz". Com a caixa desmarcada (padrão) o G-code é idêntico ao do Python.
 - **Tema escuro** usa tons mais claros da mesma paleta (`#3b82f6`, `#22c55e`, `#eab308`, `#ef4444`) por contraste sobre o fundo escuro; o tema claro usa exatamente as cores do design (`#2563eb`, `#16a34a`, `#ca8a04`, `#dc2626`).
 - **Relatório PDF** e **atualizador automático** (`latest.json`) ainda não foram portados; o item de menu do relatório aparece desabilitado ("em breve").
-- O `.tap` é gravado com fim de linha **LF** (o Python no Windows gravava CRLF; o Mach3 aceita os dois).
+- O `.tap` é gravado com fim de linha **CRLF** no Windows (como o Python gravava lá) e LF nos demais sistemas; o Mach3 aceita os dois.
 - O 3D é um renderizador por software sobre o `Painter` do egui (linhas projetadas), não VTK.
 
 ## Integração contínua

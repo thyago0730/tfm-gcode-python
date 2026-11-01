@@ -189,6 +189,43 @@ impl TfmApp {
         app
     }
 
+    /// App sem janela, para testes: config padrão, qualidade e auditoria em
+    /// subpastas de `dir`, tema claro e trabalhador de cálculo ocioso.
+    #[cfg(test)]
+    pub(crate) fn headless(dir: &std::path::Path) -> Self {
+        let cfg = AppConfig::default();
+        let snapshot = UiSnapshot::from_config(&cfg);
+        let ui_state = UiState::default();
+        let last_operation = ui_state.operation;
+        TfmApp {
+            cfg_path: dir.join("config").join("config.json"),
+            theme: snapshot.theme,
+            palette: Palette::light(),
+            ui: ui_state,
+            quality: QualityManager::load(&dir.join("config"), &dir.join("quality")),
+            audit: AuditLogger::new(dir.join("logs")),
+            compute: ComputeHandle::new(egui::Context::default()),
+            result: None,
+            notifications: Vec::new(),
+            dialogs: Dialogs::default(),
+            integration: IntegrationState::default(),
+            gcode_view: GcodeView::default(),
+            view3d: View3d,
+            center_tab: CenterTab::View3d,
+            left_open: snapshot.left_pinned,
+            right_open: snapshot.right_pinned,
+            left_w: snapshot.left_w,
+            right_w: snapshot.right_w,
+            last_saved: snapshot,
+            dirty_since: None,
+            last_key: None,
+            last_change: Instant::now(),
+            last_operation,
+            last_warned_key: None,
+            cfg,
+        }
+    }
+
     /// Registra um aviso com a hora atual (`HH:MM:SS`), mantendo só os
     /// últimos [`MAX_NOTIFICATIONS`].
     pub fn notify(&mut self, kind: NotifyKind, text: impl Into<String>) {
