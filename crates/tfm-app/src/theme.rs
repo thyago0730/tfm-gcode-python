@@ -122,12 +122,12 @@ impl Palette {
         }
     }
 
-    /// Tema escuro. Usa os tons **mais claros** (500) da mesma família das
-    /// cores do design, por contraste sobre o fundo `#15181d`: accent `#3b82f6`
-    /// (claro: `#2563eb`), sucesso `#22c55e` (`#16a34a`), atenção `#eab308`
-    /// (`#ca8a04`), erro `#ef4444` (`#dc2626`). Desvio aceito pelo controlador na
-    /// revisão da Task 15. Fundo `#15181d`, cartões `#1e2229`, texto `#e5e7eb`;
-    /// as nove cores de camada são as mesmas do tema claro.
+    /// Tema escuro. Nota de design: usa os tons **mais claros** (500) da mesma
+    /// família das cores do design, por contraste sobre o fundo `#15181d`:
+    /// accent `#3b82f6` (claro: `#2563eb`), sucesso `#22c55e` (`#16a34a`),
+    /// atenção `#eab308` (`#ca8a04`), erro `#ef4444` (`#dc2626`). Fundo
+    /// `#15181d`, cartões `#1e2229`, texto `#e5e7eb`; as nove cores de camada
+    /// são as mesmas do tema claro.
     pub fn dark() -> Palette {
         Palette {
             accent: hex(0x3b82f6),
@@ -180,6 +180,10 @@ pub fn apply(ctx: &egui::Context, theme: Theme) -> Palette {
     Palette::resolve(ctx)
 }
 
+/// Tamanho mínimo do estilo `Small` (o padrão do egui, 9 px, fica ilegível
+/// nos rótulos secundários do app).
+const MIN_SMALL_PX: f32 = 11.0;
+
 fn tune_style(style: &mut egui::Style) {
     style.spacing.item_spacing = egui::vec2(8.0, 6.0);
     style.spacing.button_padding = egui::vec2(10.0, 5.0);
@@ -187,6 +191,9 @@ fn tune_style(style: &mut egui::Style) {
     style.spacing.window_margin = Margin::same(12);
     style.interaction.selectable_labels = false;
     style.visuals.slider_trailing_fill = true;
+    if let Some(small) = style.text_styles.get_mut(&egui::TextStyle::Small) {
+        small.size = small.size.max(MIN_SMALL_PX);
+    }
 }
 
 /// Tons de fundo/borda/texto dos widgets de um tema.
@@ -444,6 +451,24 @@ mod tests {
         assert_eq!(v.hyperlink_color, p.accent);
         assert_eq!(v.warn_fg_color, p.warning);
         assert_eq!(v.error_fg_color, p.danger);
+    }
+
+    #[test]
+    fn estilo_small_tem_no_minimo_11_px() {
+        let mut style = egui::Style::default();
+        tune_style(&mut style);
+        let small = style
+            .text_styles
+            .get(&egui::TextStyle::Small)
+            .expect("estilo Small");
+        assert!(small.size >= MIN_SMALL_PX, "Small = {} px", small.size);
+        // Um Small já maior não é reduzido.
+        let mut bigger = egui::Style::default();
+        if let Some(s) = bigger.text_styles.get_mut(&egui::TextStyle::Small) {
+            s.size = 14.0;
+        }
+        tune_style(&mut bigger);
+        assert_eq!(bigger.text_styles[&egui::TextStyle::Small].size, 14.0);
     }
 
     #[test]

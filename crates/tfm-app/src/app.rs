@@ -40,12 +40,14 @@ pub enum NotifyKind {
 }
 
 impl NotifyKind {
+    /// Prefixo do aviso, em maiúsculas como no `show_notification` do
+    /// Python (`[INFO]`, `[SUCESSO]`, `[AVISO]`, `[ERRO]`).
     pub fn label(self) -> &'static str {
         match self {
-            NotifyKind::Info => "Info",
-            NotifyKind::Sucesso => "Sucesso",
-            NotifyKind::Aviso => "Aviso",
-            NotifyKind::Erro => "Erro",
+            NotifyKind::Info => "INFO",
+            NotifyKind::Sucesso => "SUCESSO",
+            NotifyKind::Aviso => "AVISO",
+            NotifyKind::Erro => "ERRO",
         }
     }
 
@@ -571,7 +573,7 @@ impl TfmApp {
             "Fixar painel do G-code"
         };
         if ui
-            .toggle_value(&mut right_pinned, "📌")
+            .toggle_value(&mut right_pinned, "📌 G-code")
             .on_hover_text(hint)
             .changed()
         {
@@ -584,7 +586,7 @@ impl TfmApp {
             "Fixar painel de parâmetros"
         };
         if ui
-            .toggle_value(&mut left_pinned, "📌")
+            .toggle_value(&mut left_pinned, "📌 Parâmetros")
             .on_hover_text(hint)
             .changed()
         {

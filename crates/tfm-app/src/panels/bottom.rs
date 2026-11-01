@@ -8,11 +8,11 @@
 //! placeholders de `limpar_resultados` (`"0.00"` nos resultados, `"..."` nos
 //! custos) e o motivo (`gen_error`) abre a coluna de avisos em `danger`.
 
-use egui::{Align, Button, Color32, FontId, Label, Layout, RichText, ScrollArea, TextStyle, Ui};
+use egui::{Align, Button, Color32, Label, Layout, RichText, ScrollArea, Ui};
 use tfm_core::estimates::{CostSummary, Estimates, ResultText};
 use tfm_core::overlap::Uniformity;
 
-use crate::app::{Notification, NotifyKind, TfmApp};
+use crate::app::{Notification, TfmApp};
 use crate::theme::Palette;
 
 /// Valor dos resultados sem cálculo válido (`limpar_resultados`).
@@ -195,20 +195,10 @@ fn uniformity_color(level: Uniformity, palette: &Palette) -> Color32 {
     }
 }
 
-/// Prefixo do tipo de aviso, em maiúsculas como no `show_notification` do
-/// Python (`[INFO]`, `[SUCESSO]`, `[AVISO]`, `[ERRO]`).
-fn kind_tag(kind: NotifyKind) -> &'static str {
-    match kind {
-        NotifyKind::Info => "INFO",
-        NotifyKind::Sucesso => "SUCESSO",
-        NotifyKind::Aviso => "AVISO",
-        NotifyKind::Erro => "ERRO",
-    }
-}
-
-/// Linha de aviso como o Python a escrevia: `HH:MM:SS [TIPO] texto`.
+/// Linha de aviso como o Python a escrevia: `HH:MM:SS [TIPO] texto`
+/// (o prefixo é [`NotifyKind::label`], em maiúsculas).
 fn notification_line(n: &Notification) -> String {
-    format!("{} [{}] {}", n.time, kind_tag(n.kind), n.text)
+    format!("{} [{}] {}", n.time, n.kind.label(), n.text)
 }
 
 /// Coluna de indicadores: título em negrito e as linhas rótulo/valor numa
@@ -282,12 +272,11 @@ fn warnings_column(
         .stick_to_bottom(true)
         .show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = ROW_GAP;
-            // `small()` e `monospace()` trocam o mesmo `text_style` (o último
-            // vence): monoespaçado no tamanho "Small" exige um `FontId`.
-            let small_mono = FontId::monospace(TextStyle::Small.resolve(ui.style()).size);
+            // Monoespaçado em tamanho normal (`TextStyle::Monospace`): o
+            // tamanho "Small" ficava ilegível nas capturas de tela.
             if let Some(err) = gen_error {
                 let text = RichText::new(format!("Geração do G-code: {err}"))
-                    .font(small_mono.clone())
+                    .monospace()
                     .strong()
                     .color(palette.danger);
                 ui.label(text);
@@ -297,7 +286,7 @@ fn warnings_column(
             }
             for n in notifications.iter() {
                 let text = RichText::new(notification_line(n))
-                    .font(small_mono.clone())
+                    .monospace()
                     .color(n.kind.color(palette));
                 ui.label(text);
             }
@@ -307,6 +296,7 @@ fn warnings_column(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::NotifyKind;
     use crate::compute::empty_estimates;
 
     fn palette() -> Palette {
@@ -427,8 +417,9 @@ mod tests {
             notification_line(&n),
             "12:34:56 [AVISO] RPM acima do limite"
         );
-        assert_eq!(kind_tag(NotifyKind::Info), "INFO");
-        assert_eq!(kind_tag(NotifyKind::Sucesso), "SUCESSO");
-        assert_eq!(kind_tag(NotifyKind::Erro), "ERRO");
+        assert_eq!(NotifyKind::Info.label(), "INFO");
+        assert_eq!(NotifyKind::Sucesso.label(), "SUCESSO");
+        assert_eq!(NotifyKind::Aviso.label(), "AVISO");
+        assert_eq!(NotifyKind::Erro.label(), "ERRO");
     }
 }
