@@ -84,8 +84,8 @@ mod tip {
     pub const FECHAMENTO_UNIFORME: &str = "O comprimento passa a valer de borda a borda do \
         material depositado: o centro do cordão anda meia largura para dentro de cada lado e as \
         voltas viram inteiras nesse curso. Na Espiral, cada ponta fecha num anel de 360° (já \
-        inclui \"Fechar início/fim\"). A sobreposição só aumenta; o passo real aparece nos \
-        resultados.";
+        inclui \"Fechar início/fim\"). Nas oscilações, a banda inteira cabe no comprimento e o \
+        apagamento gira só em A. A sobreposição só aumenta; o passo real aparece nos resultados.";
     pub const FECHAR_PONTAS: &str =
         "Dá uma volta completa parada no início e no fim para fechar o cordão.";
     pub const RECUAR: &str = "Vai ao Z e Y zero máquina (G53) antes de ligar a tocha.";
@@ -488,6 +488,15 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                     "spiral_close_ends",
                     tip::FECHAR_PONTAS,
                 );
+            }
+            if matches!(
+                op,
+                Operation::Espiral
+                    | Operation::EspiralMultiperfil
+                    | Operation::OscilacaoLinear
+                    | Operation::OscilacaoQuadrada
+                    | Operation::OscilacaoQuadradaContinua
+            ) {
                 f.flag(
                     ui,
                     "Fechamento uniforme (borda a borda)",

@@ -38,7 +38,8 @@ use crate::gcode::common::{
     rotary_arc_bounds,
 };
 use crate::gcode::multiperfil::layer_profile_widths;
-use crate::overlap::{uniform_closing, UniformClosing, Uniformity};
+use crate::gcode::oscillation::oscillation_closing;
+use crate::overlap::{uniform_closing, OverlapMetrics, UniformClosing, Uniformity};
 use crate::params::{BolachaTipo, OscillationType, Params, WeldingMode};
 use crate::quality::QualityManager;
 
@@ -344,12 +345,24 @@ fn overlap_results(p: &Params) -> OverlapResults {
     let mut last = overlap_metrics(p, layer_count - 1, None, None);
     // Fechamento uniforme: o passo que sai no G-code é o redistribuído, então
     // é ele que dá a sobreposição real.
-    if p.fechamento_uniforme && p.welding_mode == WeldingMode::Espiral {
-        for (m, layer) in [(&mut first, 0), (&mut last, layer_count - 1)] {
-            let passo = closing_plan(p, layer, m.step_over_mm).passo;
-            let largura = py_max(m.bead.effective_width_mm, 1e-6);
-            m.step_over_mm = passo;
-            m.achieved_overlap_pct = (1.0 - passo / largura).clamp(0.0, 0.99) * 100.0;
+    if p.fechamento_uniforme {
+        match p.welding_mode {
+            WeldingMode::Espiral => {
+                for (m, layer) in [(&mut first, 0), (&mut last, layer_count - 1)] {
+                    let passo = closing_plan(p, layer, m.step_over_mm).passo;
+                    let largura = m.bead.effective_width_mm;
+                    set_real_step(m, passo, largura);
+                }
+            }
+            WeldingMode::Oscilacao
+            | WeldingMode::OscilacaoLinear
+            | WeldingMode::OscilacaoQuadrada => {
+                let c = oscillation_closing(p);
+                for m in [&mut first, &mut last] {
+                    set_real_step(m, c.passo, c.band_width);
+                }
+            }
+            _ => {}
         }
     }
     let (first_eff, last_eff) = (first.bead.effective_width_mm, last.bead.effective_width_mm);
@@ -378,6 +391,13 @@ fn overlap_results(p: &Params) -> OverlapResults {
         uniformity: format!("{} | var {}%", level.label(), txt1(variation_pct)),
         uniformity_level: level,
     }
+}
+
+/// Grava em `m` o passo que sai no G-code e a sobreposição que ele dá sobre
+/// a largura de material `largura`.
+fn set_real_step(m: &mut OverlapMetrics, passo: f64, largura: f64) {
+    m.step_over_mm = passo;
+    m.achieved_overlap_pct = (1.0 - passo / py_max(largura, 1e-6)).clamp(0.0, 0.99) * 100.0;
 }
 
 /// Plano do fechamento uniforme da camada `layer` com o passo `passo`.
@@ -759,6 +779,13 @@ fn oscilacao(p: &Params, s: &Shared) -> ModeOutcome {
     } else {
         1.0
     };
+    let fechar = p.fechamento_uniforme && s.h > 0.0;
+    let (passo_sobreposicao, num_passos_axiais) = if fechar {
+        let c = oscillation_closing(p);
+        (c.passo, c.aneis as f64)
+    } else {
+        (passo_sobreposicao, num_passos_axiais)
+    };
     let tempo_min_total_osc = num_passos_axiais * tempo_por_volta;
     let tempo_leads = if s.taxa > 0.0 {
         (s.lead_in + s.lead_out) / s.taxa
@@ -772,7 +799,11 @@ fn oscilacao(p: &Params, s: &Shared) -> ModeOutcome {
             over_limit: s.rpm_over_limit(rpm_a),
         },
         pitch: ResultText {
-            text: format!("{} (axial)", txt3(passo_sobreposicao)),
+            text: if fechar {
+                format!("{} (axial, volta inteira)", txt3(passo_sobreposicao))
+            } else {
+                format!("{} (axial)", txt3(passo_sobreposicao))
+            },
             over_limit: s.x_travel_over_limit(),
         },
         rotations: format!("{} (passos axiais)", txt2(num_passos_axiais)),

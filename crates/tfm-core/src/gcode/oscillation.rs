@@ -24,10 +24,12 @@ use std::f64::consts::PI;
 
 use super::common::{
     append_torch_disable, append_torch_enable, apply_smart_layers, build_footer, build_header,
-    direction_str, effective_base_diameter, f1, f3, layer_separator, py_max, py_min, py_or, Pos,
+    direction_str, effective_base_diameter, extinguish_arc_deg, f1, f3,
+    fechamento_uniforme_comment, layer_separator, overlap_metrics, py_max, py_min, py_or, Pos,
 };
 use super::GenError;
-use crate::params::{Direction, Params};
+use crate::overlap::{uniform_closing, UniformClosing};
+use crate::params::{Direction, OscillationType, Params, WeldingMode};
 
 const M0_CONFIRM: &str = "M0 (Confirme e pressione Start)";
 const CLOSE_TO_END: &str = "(Fechamento ate fim do revestimento)";
@@ -125,6 +127,14 @@ struct LayerFrame {
     /// `rotary_radius_mm = max(current_d, 1e-6) / 2.0`.
     rotary_radius: f64,
     rotation_sign: f64,
+    /// Fechamento uniforme: o comprimento vale de borda a borda do material.
+    closing: bool,
+    /// Largura efetiva do cordão nesta camada (0 sem o fechamento uniforme).
+    bead_width: f64,
+    /// Fechamento uniforme: primeira e última posição do centro do cordão
+    /// dentro da peça, já com o recuo de meia largura e sem os leads.
+    x_first: f64,
+    x_last: f64,
 }
 
 impl LayerFrame {
@@ -137,7 +147,7 @@ impl LayerFrame {
         let is_internal = p.is_internal();
         let part_length = p.comprimento_revestir;
         // Na interna a direção é ignorada: sempre de -L até 0.
-        let (x_start, x_end, x_exit) = if is_internal {
+        let (mut x_start, mut x_end, x_exit) = if is_internal {
             (-part_length, 0.0, Some(p.face_clearance()))
         } else {
             match p.direcao_soldagem {
@@ -146,6 +156,27 @@ impl LayerFrame {
                 Direction::DireitaEsquerda => (0.0 + p.lead_in, -(part_length + p.lead_out), None),
             }
         };
+        // Fechamento uniforme: o centro do cordão recua meia largura de cada
+        // lado; peça mais estreita que o cordão fica com o centro no meio.
+        let closing = p.fechamento_uniforme;
+        let bead_width = if closing {
+            overlap_metrics(p, 0, Some(current_d), None)
+                .bead
+                .effective_width_mm
+        } else {
+            0.0
+        };
+        let recuo = py_max(py_min(bead_width, part_length), 0.0) / 2.0;
+        let sentido = if is_internal || p.direcao_soldagem == Direction::EsquerdaDireita {
+            1.0
+        } else {
+            -1.0
+        };
+        let origem = if is_internal { -part_length } else { 0.0 };
+        if closing {
+            x_start += sentido * recuo;
+            x_end -= sentido * recuo;
+        }
         let d_floor = py_max(current_d, 1e-6);
         LayerFrame {
             z_layer,
@@ -159,6 +190,10 @@ impl LayerFrame {
             circunferencia: PI * d_floor,
             rotary_radius: d_floor / 2.0,
             rotation_sign: p.rotation_sign(),
+            closing,
+            bead_width,
+            x_first: origem + sentido * recuo,
+            x_last: origem + sentido * (part_length - recuo),
         }
     }
 
@@ -167,6 +202,10 @@ impl LayerFrame {
     /// externa. (A linear escolhe por `passo_sign`/`is_internal`, com o mesmo
     /// resultado.)
     fn clamp_x(&self, x: f64) -> f64 {
+        if self.closing {
+            let (lo, hi) = (self.x_first.min(self.x_last), self.x_first.max(self.x_last));
+            return py_max(lo, py_min(hi, x));
+        }
         if self.is_internal || self.direction == Direction::DireitaEsquerda {
             py_max(-self.part_length, py_min(0.0, x))
         } else {
@@ -181,6 +220,31 @@ impl LayerFrame {
             format!("(SENTIDO: {})", direction_str(self.direction)),
             format!("G00 Z{}", f3(self.z_seguranca)),
         ]
+    }
+
+    /// Comentário do fechamento uniforme, logo depois do sentido, como na
+    /// espiral. Cada anel é uma volta inteira.
+    fn push_closing_comment(&self, seg: &mut Vec<String>, passo: f64, aneis: i64) {
+        let plano = UniformClosing {
+            x_start: self.x_first,
+            x_end: self.x_last,
+            passo,
+            voltas: aneis as f64,
+        };
+        seg.insert(2, fechamento_uniforme_comment(&plano));
+    }
+
+    /// No fechamento uniforme o apagamento fica só em A: em X, a F da
+    /// oscilação, ele levaria o cordão muito além da borda.
+    fn closing_tail(&self, tail: WeldTail) -> WeldTail {
+        if !self.closing {
+            return tail;
+        }
+        let (x, a) = (tail.end.x.unwrap_or(0.0), tail.end.a.unwrap_or(0.0));
+        WeldTail {
+            start: Pos::xa(x, a - self.rotation_sign),
+            end: Pos::xa(x, a),
+        }
     }
 
     /// Final de todo segmento: apagamento da tocha (prolongado ao longo do
@@ -271,6 +335,13 @@ fn build_linear_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
 
     let actual_passo_axial = py_max(p.largura_cordao * (1.0 - p.sobreposicao / 100.0), 1e-6);
     let num_passos_axiais = axial_step_count(part_length, actual_passo_axial);
+    // Fechamento uniforme: o primeiro e o último anel encostam nas bordas.
+    let (x_primeiro, actual_passo_axial, num_passos_axiais) = if fr.closing {
+        let (passo, aneis) = linear_rings(&fr, actual_passo_axial);
+        (fr.x_first, passo, aneis)
+    } else {
+        (x_primeiro, actual_passo_axial, num_passos_axiais)
+    };
     let circunferencia = fr.circunferencia;
     if circunferencia <= 0.0 {
         return vec![LINEAR_GEOM_ERROR.to_string()];
@@ -286,6 +357,9 @@ fn build_linear_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
     let feed_linear = py_or(p.velocidade_oscilacao_mm_min, taxa_de_deposicao);
 
     let mut seg = fr.segment_head(layer_num);
+    if fr.closing {
+        fr.push_closing_comment(&mut seg, actual_passo_axial, num_passos_axiais);
+    }
     let mut current_a_total = (layer_num as f64 * 15.0) * rotation_sign;
     // Posiciona no início do revestimento.
     seg.push(format!("G00 X{} A{}", f3(fr.x_start), f3(current_a_total)));
@@ -310,7 +384,18 @@ fn build_linear_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
             seg.push(format!("G01 F{} X{}", f1(feed_linear), f3(x_nominal)));
             current_x = x_nominal;
         }
-        let target_a = current_a_total + rotation_sign * 360.0;
+        // No último anel o M102 vem antes: ainda sai material no apagamento,
+        // e o cordão deve terminar quando o anel fecha 360°.
+        let fecha_no_anel = fr.closing
+            && passo_idx == num_passos_axiais - 1
+            && (fr.is_internal || p.lead_out.abs() <= 1e-6);
+        let arco = if fecha_no_anel {
+            let apagamento = extinguish_arc_deg(p, taxa_de_deposicao, fr.rotary_radius);
+            py_max(360.0 - apagamento, 0.0)
+        } else {
+            360.0
+        };
+        let target_a = current_a_total + rotation_sign * arco;
         seg.push(format!("G01 F{} A{}", f1(feed_angular), f3(target_a)));
         tail.set(current_x, current_a_total, current_x, target_a);
         current_a_total = target_a;
@@ -326,9 +411,17 @@ fn build_linear_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
         tail.set(current_x, current_a_total, fr.x_end, current_a_total);
     }
 
+    let tail = fr.closing_tail(tail);
     let speeds = tail.torch_off_speeds(feed_linear, feed_angular, taxa_de_deposicao);
     fr.finish_segment(&mut seg, p, layer_num, &tail, speeds);
     seg
+}
+
+/// Fechamento uniforme da linear: `(espaçamento, anéis)` com o espaçamento
+/// redistribuído no curso do centro do cordão, sem nunca crescer.
+fn linear_rings(fr: &LayerFrame, passo: f64) -> (f64, i64) {
+    let plano = uniform_closing(fr.x_first, fr.x_last, passo, 0.0);
+    (plano.passo, plano.voltas as i64 + 1)
 }
 
 // ---------------------------------------------------------------------------
@@ -339,6 +432,11 @@ fn build_linear_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
 /// variantes sequencial e contínua (`generator.py:1167-1183` e `1334-1348`).
 struct SquareGeom {
     osc_length: f64,
+    /// Início do primeiro anel (`x_start_anel` do passo 0).
+    x_base: f64,
+    /// `true` no comportamento do Python: o último passo axial não oscila e
+    /// só fecha em X até o fim. O fechamento uniforme dispensa esse passo.
+    closing_step: bool,
     actual_passo_axial: f64,
     num_passos_axiais: i64,
     num_passos_angulares_por_volta: i64,
@@ -356,6 +454,22 @@ impl SquareGeom {
         let osc_length = p.oscilacao_comprimento;
         let actual_passo_axial = py_max(osc_length * (p.sobreposicao / 100.0), 1e-6);
         let num_passos_axiais = axial_step_count(fr.part_length, actual_passo_axial);
+        // Fechamento uniforme: a banda inteira cabe no curso do centro do
+        // cordão; a oscilação encurta se for maior que ele.
+        let (osc_length, actual_passo_axial, num_passos_axiais, x_base, closing_step) =
+            if fr.closing {
+                let (osc, passo, aneis) = square_bands(fr, osc_length, actual_passo_axial);
+                (osc, passo, aneis, fr.x_first, false)
+            } else {
+                let x_base = if fr.is_internal { -fr.part_length } else { 0.0 };
+                (
+                    osc_length,
+                    actual_passo_axial,
+                    num_passos_axiais,
+                    x_base,
+                    true,
+                )
+            };
         let circunferencia = fr.circunferencia;
         let desloc_linear_angular = (p.deslocamento_angular_perc / 100.0) * p.largura_cordao;
         if circunferencia <= 0.0 || desloc_linear_angular <= 0.0 {
@@ -370,6 +484,8 @@ impl SquareGeom {
         };
         Some(SquareGeom {
             osc_length,
+            x_base,
+            closing_step,
             actual_passo_axial,
             num_passos_axiais,
             num_passos_angulares_por_volta,
@@ -393,23 +509,84 @@ impl SquareGeom {
     fn ring_x(&self, fr: &LayerFrame, passo_idx: i64) -> (f64, f64) {
         let idx = passo_idx as f64;
         let (x_osc_ida, x_osc_volta) = if fr.is_internal {
-            let x_start_anel = -fr.part_length + idx * self.actual_passo_axial;
+            let x_start_anel = self.x_base + idx * self.actual_passo_axial;
             (x_start_anel + self.osc_length, x_start_anel)
         } else {
             match fr.direction {
                 Direction::EsquerdaDireita => {
-                    let x_start_anel = 0.0 + idx * self.actual_passo_axial;
+                    let x_start_anel = self.x_base + idx * self.actual_passo_axial;
                     (x_start_anel + self.osc_length, x_start_anel)
                 }
                 // X vai de 0 para -L: o passo i começa em -i*passo e oscila
                 // até -(i*passo + osc_length).
                 Direction::DireitaEsquerda => {
-                    let x_start_anel = 0.0 - idx * self.actual_passo_axial;
+                    let x_start_anel = self.x_base - idx * self.actual_passo_axial;
                     (x_start_anel - self.osc_length, x_start_anel)
                 }
             }
         };
         (fr.clamp_x(x_osc_ida), fr.clamp_x(x_osc_volta))
+    }
+}
+
+/// Fechamento uniforme das quadradas: `(oscilação, passo, anéis)`. As bandas
+/// vão da primeira à última posição do centro do cordão, com o passo
+/// redistribuído sem nunca crescer. Sem os cortes no limite, nenhuma banda
+/// acumula material na ponta.
+fn square_bands(fr: &LayerFrame, osc_length: f64, passo: f64) -> (f64, f64, i64) {
+    let curso = (fr.x_last - fr.x_first).abs();
+    let osc = py_min(osc_length, curso);
+    let plano = uniform_closing(fr.x_first, fr.x_last, passo, osc);
+    (osc, plano.passo, plano.voltas as i64 + 1)
+}
+
+/// Fechamento uniforme, pelo diâmetro de base: o que as estimativas mostram.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OscillationClosing {
+    /// Passo axial redistribuído (mm).
+    pub passo: f64,
+    /// Anéis (voltas inteiras).
+    pub aneis: i64,
+    /// Largura de material de cada anel: o cordão, mais o curso da oscilação
+    /// nas quadradas.
+    pub band_width: f64,
+}
+
+/// `true` nas duas quadradas, seguindo o mesmo despacho de `gcode::generate`.
+fn is_square(p: &Params) -> bool {
+    match p.welding_mode {
+        WeldingMode::OscilacaoQuadrada => true,
+        WeldingMode::Oscilacao => matches!(
+            p.oscillation_type,
+            Some(OscillationType::Quadrada | OscillationType::QuadradaContinua)
+        ),
+        _ => false,
+    }
+}
+
+/// Plano do fechamento uniforme da oscilação selecionada em `p`.
+pub fn oscillation_closing(p: &Params) -> OscillationClosing {
+    let closing = Params {
+        fechamento_uniforme: true,
+        ..p.clone()
+    };
+    let fr = LayerFrame::new(&closing, effective_base_diameter(p));
+    if is_square(p) {
+        let passo = py_max(p.oscilacao_comprimento * (p.sobreposicao / 100.0), 1e-6);
+        let (osc, passo, aneis) = square_bands(&fr, p.oscilacao_comprimento, passo);
+        OscillationClosing {
+            passo,
+            aneis,
+            band_width: fr.bead_width + osc,
+        }
+    } else {
+        let passo = py_max(p.largura_cordao * (1.0 - p.sobreposicao / 100.0), 1e-6);
+        let (passo, aneis) = linear_rings(&fr, passo);
+        OscillationClosing {
+            passo,
+            aneis,
+            band_width: fr.bead_width,
+        }
     }
 }
 
@@ -427,6 +604,9 @@ fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
     let fa = f1(g.feed_a);
 
     let mut seg = fr.segment_head(layer_num);
+    if fr.closing {
+        fr.push_closing_comment(&mut seg, g.actual_passo_axial, n);
+    }
     let mut current_a_total = g.stagger_a(layer_num, rotation_sign);
     let mut tail = WeldTail::at(fr.x_start, current_a_total);
     for passo_idx in 0..n {
@@ -462,7 +642,7 @@ fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
             );
         }
 
-        if passo_idx == n - 1 {
+        if passo_idx == n - 1 && g.closing_step {
             seg.push(CLOSE_TO_END.to_string());
             if (fr.x_end - current_x_start_pos).abs() > 1e-6 {
                 seg.push(format!("G01 F{fx} X{}", f3(fr.x_end)));
@@ -496,6 +676,15 @@ fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
         }
     }
 
+    // Sem o passo final em X, o fim extra pedido sai depois do último anel.
+    if !g.closing_step && !fr.is_internal && p.lead_out.abs() > 1e-6 {
+        let (_, x_fim) = g.ring_x(&fr, n - 1);
+        seg.push(LEAD_OUT.to_string());
+        seg.push(format!("G01 F{fx} X{}", f3(fr.x_end)));
+        tail.set(x_fim, current_a_total, fr.x_end, current_a_total);
+    }
+
+    let tail = fr.closing_tail(tail);
     let speeds = tail.torch_off_speeds(g.feed_x, g.feed_a, taxa_de_deposicao);
     fr.finish_segment(&mut seg, p, layer_num, &tail, speeds);
     seg
@@ -586,6 +775,9 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
     let stairs = Staircase::new(g.feed_x, g.feed_a, p.osc_test_gran_x, p.osc_test_gran_a);
 
     let mut seg = fr.segment_head(layer_num);
+    if fr.closing {
+        fr.push_closing_comment(&mut seg, g.actual_passo_axial, n);
+    }
     seg.reserve(stairs.estimate_lines(&g));
     // Stagger angular intercamadas.
     let mut current_a_total = g.stagger_a(layer_num, rotation_sign);
@@ -628,7 +820,7 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
             }
         }
 
-        if passo_idx == n - 1 {
+        if passo_idx == n - 1 && g.closing_step {
             // Passo final: fecha somente em X até o término, sem rotação.
             seg.push(CLOSE_TO_END.to_string());
             let dist_ate_fim = (fr.x_end - current_x_start_pos).abs();
@@ -705,6 +897,7 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
         }
     }
 
+    let tail = fr.closing_tail(tail);
     let speeds = tail.torch_off_speeds(g.feed_x, g.feed_a, taxa_de_deposicao);
     fr.finish_segment(&mut seg, p, layer_num, &tail, speeds);
     seg
