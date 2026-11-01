@@ -175,6 +175,13 @@ pub fn estimate_effective_bead_width(
     }
 }
 
+/// Número máximo de passes que `compute_overlap_metrics` calcula.
+///
+/// Uma largura-alvo enorme ou um cordão com largura ~0 pediriam milhões de passes
+/// (e um `offsets` de centenas de MB); acima deste limite o número de passes é
+/// fixado aqui. Abaixo dele o resultado é idêntico ao modelo Python.
+pub const MAX_PASSES: usize = 100_000;
+
 /// Calcula passo lateral, número de passes, deslocamentos, cobertura e
 /// uniformidade para uma sobreposição alvo e (opcionalmente) uma largura alvo.
 pub fn compute_overlap_metrics(
@@ -197,7 +204,11 @@ pub fn compute_overlap_metrics(
     let step_over_mm = py_max(effective_width * (1.0 - (overlap_target / 100.0)), 1e-6);
     let achieved_overlap_pct = clamp((1.0 - (step_over_mm / effective_width)) * 100.0, 0.0, 99.0);
 
-    let target_width = target_width_mm.map(|t| py_max(py_or(t, 0.0), 0.0));
+    // Alvo não finito ("inf"/"nan" vindos de um campo de texto) é tratado
+    // exatamente como ausência de alvo: um passe, sem métricas de cobertura.
+    let target_width = target_width_mm
+        .filter(|t| t.is_finite())
+        .map(|t| py_max(py_or(t, 0.0), 0.0));
     let (pass_count, offsets, effective_cover_width_mm) = match target_width {
         None => (1usize, vec![0.0], effective_width),
         Some(target_width) => {
@@ -205,11 +216,13 @@ pub fn compute_overlap_metrics(
                 1
             } else {
                 let extra_span = py_max(target_width - effective_width, 0.0);
-                1 + (extra_span / step_over_mm).ceil() as usize
+                // `as usize` satura (+inf -> usize::MAX), então a soma também satura.
+                1usize.saturating_add((extra_span / step_over_mm).ceil() as usize)
             };
             if force_min_two_passes && target_width > 0.0 && target_width >= (step_over_mm * 0.5) {
                 pass_count = pass_count.max(2);
             }
+            let pass_count = pass_count.min(MAX_PASSES);
             if pass_count <= 1 {
                 (pass_count, vec![0.0], effective_width)
             } else {

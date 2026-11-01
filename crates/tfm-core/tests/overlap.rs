@@ -333,3 +333,44 @@ fn step_over_matches_python_reference() {
         "uniformity_score",
     );
 }
+
+// ---------------------------------------------------------------------------
+// Robustez: largura-alvo não finita e limite de passes
+// ---------------------------------------------------------------------------
+
+#[test]
+fn non_finite_target_is_single_pass() {
+    // "inf"/"nan" vindos de um campo de texto não podem derrubar o cálculo:
+    // alvo não finito é tratado exatamente como ausência de alvo.
+    let reference = compute_overlap_metrics(8.0, 40.0, 0.0, None, None, false, 1.0);
+    for target in [f64::INFINITY, f64::NEG_INFINITY, f64::NAN] {
+        let m = compute_overlap_metrics(8.0, 40.0, 0.0, None, Some(target), true, 1.0);
+        assert_eq!(m.pass_count, 1, "target {target:?}");
+        assert_eq!(m.offsets, vec![0.0], "target {target:?}");
+        assert_eq!(m.target_width_mm, None, "target {target:?}");
+        assert_eq!(m.coverage_ratio, 1.0, "target {target:?}");
+        assert_eq!(m.fill_error_mm, 0.0, "target {target:?}");
+        assert_eq!(m, reference, "target {target:?}");
+    }
+}
+
+#[test]
+fn pass_count_is_clamped() {
+    // nominal 1e-3 e alvo 1e9 pediriam ~1e14 passes; o limite evita a alocação.
+    let m = compute_overlap_metrics(1e-3, 99.0, 0.0, None, Some(1e9), false, 1.0);
+    assert_eq!(m.pass_count, 100_000);
+    assert_eq!(m.pass_count, tfm_core::overlap::MAX_PASSES);
+    assert_eq!(m.offsets.len(), 100_000);
+    // offsets continuam simétricos e com o passo correto
+    let span = m.step_over_mm * 99_999.0;
+    assert_eq!(m.offsets[0], -span / 2.0);
+    assert_eq!(
+        m.offsets[99_999],
+        (-span / 2.0) + (99_999.0 * m.step_over_mm)
+    );
+    assert_eq!(m.effective_cover_width_mm, m.bead.effective_width_mm + span);
+    assert_eq!(m.target_width_mm, Some(1e9));
+    // abaixo do limite nada muda: 7 passes como antes
+    let small = compute_overlap_metrics(8.0, 50.0, 0.0, None, Some(30.0), false, 1.0);
+    assert_eq!(small.pass_count, 7);
+}
