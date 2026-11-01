@@ -352,6 +352,11 @@ pub struct Params {
     /// nas pontas (ver `overlap::uniform_closing`). Não existia no Python.
     #[serde(deserialize_with = "lenient_bool")]
     pub fechamento_uniforme: bool,
+    /// Compensa em rotação: acelera onde a simulação do depósito mostra que o
+    /// material acumula (ver `deposit::solve_feed_factors`). Não existia no
+    /// Python.
+    #[serde(deserialize_with = "lenient_bool")]
+    pub compensar_rotacao: bool,
     #[serde(deserialize_with = "lenient_bool")]
     pub flat_single_direction: bool,
     pub flat_orientation: FlatOrientation,
@@ -480,6 +485,7 @@ impl Default for Params {
             torch_retract_on_ignite: true,
             spiral_close_ends: false,
             fechamento_uniforme: false,
+            compensar_rotacao: false,
             flat_single_direction: false,
             flat_orientation: FlatOrientation::X,
             operacao_interna: false,
@@ -614,6 +620,7 @@ impl Params {
                 self.operacao_interna = d.operacao_interna;
                 self.spiral_close_ends = d.spiral_close_ends;
                 self.fechamento_uniforme = d.fechamento_uniforme;
+                self.compensar_rotacao = d.compensar_rotacao;
             }
         }
         self.bead_width_calibration_factor = d.bead_width_calibration_factor;

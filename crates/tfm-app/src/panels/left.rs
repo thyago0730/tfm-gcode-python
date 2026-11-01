@@ -86,6 +86,10 @@ mod tip {
         voltas viram inteiras nesse curso. Na Espiral, cada ponta fecha num anel de 360° (já \
         inclui \"Fechar início/fim\"). Nas oscilações, a banda inteira cabe no comprimento e o \
         apagamento gira só em A. A sobreposição só aumenta; o passo real aparece nos resultados.";
+    pub const COMPENSAR_ROTACAO: &str =
+        "Simula o material depositado e acelera a rotação onde ele \
+        acumula, como nos anéis das pontas. Menos sobremetal, menos pó e menos tempo. A rotação só \
+        sobe, até 2,5 vezes: confira se ela continua dentro da EPS.";
     pub const FECHAR_PONTAS: &str =
         "Dá uma volta completa parada no início e no fim para fechar o cordão.";
     pub const RECUAR: &str = "Vai ao Z e Y zero máquina (G53) antes de ligar a tocha.";
@@ -502,6 +506,14 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                     "Fechamento uniforme (borda a borda)",
                     "fechamento_uniforme",
                     tip::FECHAMENTO_UNIFORME,
+                );
+            }
+            if op == Operation::Espiral {
+                f.flag(
+                    ui,
+                    "Compensar rotação pela densidade",
+                    "compensar_rotacao",
+                    tip::COMPENSAR_ROTACAO,
                 );
             }
             if op == Operation::ChapaPlana {

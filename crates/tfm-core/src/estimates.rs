@@ -32,6 +32,7 @@ use std::f64::consts::PI;
 use indexmap::IndexMap;
 
 use crate::config::{AppConfig, MachineLimits};
+use crate::deposit::MAX_FEED_FACTOR;
 use crate::formula::{evaluate_block, formula_locals};
 use crate::gcode::common::{
     effective_base_diameter, overlap_metrics, profile_shape_str, py_max, py_min, py_or,
@@ -606,6 +607,12 @@ fn espiral(p: &Params, s: &Shared) -> ModeOutcome {
     let comprimento_total_helice = total_rotacoes_part * comprimento_helice_por_volta;
     let comprimento_total_mov = comprimento_total_helice + leads + (2.0 * s.circunferencia);
     let (rot_min_por_volta, rpm_check) = helix_rates(comprimento_helice_por_volta, s.taxa);
+    // A compensação pode acelerar até o teto: é ele que vale contra a máquina.
+    let rpm_factor = if p.compensar_rotacao {
+        MAX_FEED_FACTOR
+    } else {
+        1.0
+    };
     let tempo_min_arc = if s.taxa > 0.0 {
         comprimento_total_mov / s.taxa
     } else {
@@ -614,7 +621,7 @@ fn espiral(p: &Params, s: &Shared) -> ModeOutcome {
     ModeOutcome {
         rotation: ResultText {
             text: txt3(rot_min_por_volta),
-            over_limit: s.rpm_over_limit(rpm_check),
+            over_limit: s.rpm_over_limit(rpm_check * rpm_factor),
         },
         pitch: ResultText {
             text: if p.fechamento_uniforme {

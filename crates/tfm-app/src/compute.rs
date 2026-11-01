@@ -19,6 +19,7 @@ use std::time::Instant;
 use indexmap::IndexMap;
 use serde::Serialize;
 use tfm_core::config::AppConfig;
+use tfm_core::deposit::{self, DepositModel};
 use tfm_core::estimates::{self, Estimates};
 use tfm_core::gcode::{self, GenError};
 use tfm_core::params::Params;
@@ -55,6 +56,8 @@ pub struct ComputeResult {
     pub osc: Vec<f64>,
     /// Distância percorrida em cada movimento.
     pub dists: Vec<f64>,
+    /// Simulação do material depositado (só nas peças cilíndricas).
+    pub deposit: Option<Arc<DepositModel>>,
     /// [`params_key`] dos parâmetros + config que geraram este resultado.
     pub key: u64,
 }
@@ -73,6 +76,7 @@ impl ComputeResult {
             estimates: empty_estimates(),
             toolpath: Toolpath::default(),
             series: Series::default(),
+            deposit: None,
             osc: Vec::new(),
             dists: Vec::new(),
             key,
@@ -130,6 +134,7 @@ pub fn compute_all(params: Params, cfg: &AppConfig, key: u64) -> ComputeResult {
     let series = toolpath::temporal_series(&lines);
     let osc = toolpath::oscillation_series(&lines);
     let dists = toolpath::step_distances(&lines);
+    let deposit = deposit_model(&params, &toolpath);
     ComputeResult {
         params,
         lines,
@@ -141,8 +146,27 @@ pub fn compute_all(params: Params, cfg: &AppConfig, key: u64) -> ComputeResult {
         series,
         osc,
         dists,
+        deposit,
         key,
     }
+}
+
+/// Simula o depósito do programa. Com a compensação ligada, simula também o
+/// programa sem ela e com a mesma vazão, para comparar.
+fn deposit_model(p: &Params, tp: &Toolpath) -> Option<Arc<DepositModel>> {
+    let q = deposit::flow_rate(tp, p);
+    let mut model = deposit::simulate(tp, p, q)?;
+    if p.compensar_rotacao {
+        let nominal = Params {
+            compensar_rotacao: false,
+            ..p.clone()
+        };
+        if let Ok(lines) = gcode::generate(&nominal) {
+            let base = toolpath::build_toolpath(&lines, &nominal);
+            model.base = deposit::simulate(&base, &nominal, q).map(|m| m.report);
+        }
+    }
+    Some(Arc::new(model))
 }
 
 /// Chave que identifica uma rodada: hash do JSON dos parâmetros e da parte

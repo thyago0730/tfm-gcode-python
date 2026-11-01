@@ -5,6 +5,7 @@
 
 pub mod audit;
 pub mod config;
+pub mod deposit;
 pub mod estimates;
 pub mod formula;
 pub mod gcode;
