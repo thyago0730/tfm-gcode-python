@@ -29,6 +29,7 @@ use egui::{
     pos2, vec2, Align2, Color32, CornerRadius, FontId, Id, Mesh, Painter, PointerButton, Pos2,
     Rect, Response, Sense, Shape, Slider, Stroke, Ui, Vec2,
 };
+use tfm_core::deposit::{DepositModel, HeightMap};
 use tfm_core::gcode::common::overlap_metrics;
 use tfm_core::params::{Direction, FlatOrientation, Operation, Params, WeldingMode};
 use tfm_core::toolpath::{PathPoint, Toolpath, Vec3};
@@ -749,6 +750,134 @@ fn view_cube(
 }
 
 // ---------------------------------------------------------------------------
+// Superfície real do depósito ("Solda" nas peças cilíndricas)
+// ---------------------------------------------------------------------------
+
+/// Paradas da escala de cor: altura relativa à média e a cor nela.
+const HEAT_STOPS: [(f32, [u8; 3]); 5] = [
+    (0.6, [37, 99, 235]),
+    (0.9, [8, 145, 178]),
+    (1.0, [22, 163, 74]),
+    (1.25, [202, 138, 4]),
+    (1.6, [220, 38, 38]),
+];
+/// Teto de vértices da superfície por quadro: mapas maiores são amostrados.
+const MAX_SURFACE_VERTICES: usize = 60_000;
+/// Abaixo disto (mm) não há material para desenhar.
+const SURFACE_MIN_MM: f32 = 0.02;
+
+/// Cor da altura `t` (1.0 = média do programa): frio abaixo, verde no alvo,
+/// quente onde sobe mais.
+fn heat_color(t: f32) -> Color32 {
+    let [(first, c0), .., (last, c1)] = HEAT_STOPS;
+    if t <= first {
+        return Color32::from_rgb(c0[0], c0[1], c0[2]);
+    }
+    if t >= last {
+        return Color32::from_rgb(c1[0], c1[1], c1[2]);
+    }
+    for pair in HEAT_STOPS.windows(2) {
+        let ((t0, a), (t1, b)) = (pair[0], pair[1]);
+        if t <= t1 {
+            let k = (t - t0) / (t1 - t0);
+            let mix = |i: usize| (a[i] as f32 + (b[i] as f32 - a[i] as f32) * k) as u8;
+            return Color32::from_rgb(mix(0), mix(1), mix(2));
+        }
+    }
+    Color32::from_rgb(c1[0], c1[1], c1[2])
+}
+
+/// Malha da superfície depositada: cada ponto sobe a altura do mapa, na cor da
+/// altura, sombreado pela inclinação para os cordões aparecerem. A peça gira
+/// `rotation` graus junto com o depósito. Quadriláteros de costas para a
+/// câmera não entram, e é isso que esconde o lado de trás da peça.
+fn surface_mesh(
+    proj: &Projector,
+    map: &HeightMap,
+    mean: f32,
+    rotation: f32,
+    internal: bool,
+) -> Mesh {
+    let mut mesh = Mesh::default();
+    let cells = (map.nx * map.na) as f32;
+    let stride = (cells / MAX_SURFACE_VERTICES as f32).sqrt().ceil().max(1.0) as usize;
+    let cols = map.nx.div_ceil(stride);
+    let rows = (map.na / stride).max(3);
+    let mean = mean.max(1e-3);
+    let side = if internal { -1.0 } else { 1.0 };
+    let (forward, eye) = (proj.basis.forward, proj.basis.eye);
+    let light = normalize(add(
+        scale(forward, -1.0),
+        add(scale(proj.basis.up, 0.6), scale(proj.basis.right, -0.4)),
+    ));
+    let row_mm = std::f32::consts::TAU * map.radius / rows as f32;
+    let h_at = |row: usize, col: usize| map.height(col * stride, row * map.na / rows);
+
+    let mut index = vec![u32::MAX; rows * cols];
+    let mut outward = vec![Vec3::default(); rows * cols];
+    let mut points = vec![Vec3::default(); rows * cols];
+    let mut height = vec![0.0_f32; rows * cols];
+    for row in 0..rows {
+        let angle = (row as f32 * 360.0 / rows as f32 + 90.0).to_radians();
+        let (s, c) = angle.sin_cos();
+        let radial = rotate_part(Vec3::new(0.0, c, s), rotation);
+        let tangent = rotate_part(Vec3::new(0.0, -s, c), rotation);
+        let (up_row, down_row) = ((row + 1) % rows, (row + rows - 1) % rows);
+        for col in 0..cols {
+            let h = h_at(row, col);
+            let r = map.radius + side * h;
+            let x = map.x_at(col * stride);
+            let at = row * cols + col;
+            let (left, right) = (col.saturating_sub(1), (col + 1).min(cols - 1));
+            let run = (right - left).max(1) as f32 * stride as f32 * map.dx;
+            let slope_x = (h_at(row, right) - h_at(row, left)) / run;
+            let slope_a = (h_at(up_row, col) - h_at(down_row, col)) / (2.0 * row_mm);
+            let n = normalize(sub(
+                scale(radial, side),
+                add(
+                    scale(Vec3::new(1.0, 0.0, 0.0), slope_x),
+                    scale(tangent, slope_a),
+                ),
+            ));
+            let lit = 0.55 + 0.45 * dot(n, light).max(0.0);
+            let pos = rotate_part(Vec3::new(x, r * c, r * s), rotation);
+            outward[at] = scale(radial, side);
+            points[at] = pos;
+            height[at] = h;
+            if let Some(screen) = proj.project(pos) {
+                index[at] = mesh.vertices.len() as u32;
+                mesh.colored_vertex(screen, shade(heat_color(h / mean), lit));
+            }
+        }
+    }
+    for row in 0..rows {
+        let next = (row + 1) % rows;
+        for col in 0..cols.saturating_sub(1) {
+            let corners = [
+                row * cols + col,
+                row * cols + col + 1,
+                next * cols + col + 1,
+                next * cols + col,
+            ];
+            if corners.iter().all(|&c| height[c] < SURFACE_MIN_MM) {
+                continue;
+            }
+            if corners.iter().any(|&c| index[c] == u32::MAX) {
+                continue;
+            }
+            let [a, ..] = corners;
+            if dot(outward[a], sub(points[a], eye)) >= 0.0 {
+                continue;
+            }
+            let [i0, i1, i2, i3] = corners.map(|c| index[c]);
+            mesh.add_triangle(i0, i1, i2);
+            mesh.add_triangle(i0, i2, i3);
+        }
+    }
+    mesh
+}
+
+// ---------------------------------------------------------------------------
 // Perfil 3D do cordão ("Solda")
 // ---------------------------------------------------------------------------
 
@@ -1003,6 +1132,14 @@ impl Sim {
 // Estado do visualizador
 // ---------------------------------------------------------------------------
 
+/// Depósito acumulado até o ponto atual da simulação.
+#[derive(Clone, Debug)]
+struct PartialDeposit {
+    key: u64,
+    stamps: usize,
+    map: HeightMap,
+}
+
 /// Estado completo da aba, persistente entre quadros na memória do egui.
 #[derive(Clone, Debug)]
 pub struct ViewState {
@@ -1023,6 +1160,8 @@ pub struct ViewState {
     last_operation: Option<Operation>,
     /// Buffer reaproveitado para a polilinha em desenho.
     scratch: Vec<Pos2>,
+    /// Depósito acumulado na simulação (ver [`Self::partial_map`]).
+    partial: Option<PartialDeposit>,
 }
 
 impl Default for ViewState {
@@ -1035,6 +1174,7 @@ impl Default for ViewState {
             last_key: None,
             last_operation: None,
             scratch: Vec::new(),
+            partial: None,
         }
     }
 }
@@ -1097,6 +1237,30 @@ impl ViewState {
     /// Menu "Simulação > Parar" (e botão ⏹).
     pub fn sim_stop(&mut self) {
         self.sim.stop();
+    }
+
+    /// Mapa de altura com o programa depositado até o ponto `limit`. Avança
+    /// só com as amostras novas; voltar para trás, ou um resultado novo,
+    /// recomeça do zero.
+    fn partial_map(&mut self, key: u64, m: &DepositModel, limit: usize) -> &HeightMap {
+        let want = m.point_stamps[limit.min(m.points)] as usize;
+        if self
+            .partial
+            .as_ref()
+            .is_none_or(|p| p.key != key || p.stamps > want)
+        {
+            self.partial = None;
+        }
+        let p = self.partial.get_or_insert_with(|| PartialDeposit {
+            key,
+            stamps: 0,
+            map: m.map.empty_like(),
+        });
+        for s in &m.stamps[p.stamps..want] {
+            p.map.stamp(s);
+        }
+        p.stamps = want;
+        &p.map
     }
 
     /// Pede um novo enquadramento (duplo clique) e volta a enquadrar nos
@@ -1340,7 +1504,24 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     if let Some(r) = result {
         draw_reference(&painter, &proj, &r.params, rotation, &palette);
     }
-    let bead = result.map(|r| BeadShape::from_params(&r.params));
+    // Com "Solda" ligada as peças cilíndricas mostram o depósito real, que sobe
+    // junto com a simulação. Chapa e bolacha não têm mapa e usam o cordão.
+    let deposit = result
+        .and_then(|r| r.deposit.as_deref())
+        .filter(|_| state.sim.show_weld);
+    if let (Some(m), Some(r)) = (deposit, result) {
+        let limit = draw_limit(&state.sim, total);
+        let map = if state.sim.active() {
+            state.partial_map(r.key, m, limit)
+        } else {
+            &m.map
+        };
+        let mesh = surface_mesh(&proj, map, m.report.mean_mm, rotation, m.internal);
+        painter.add(Shape::mesh(mesh));
+    }
+    let bead = result
+        .filter(|_| deposit.is_none())
+        .map(|r| BeadShape::from_params(&r.params));
     let picked = match toolpath {
         Some(tp) => {
             let stick = (bounds.extent() * 0.08).max(2.0);
@@ -1362,6 +1543,7 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
                 stick,
                 rotation,
                 bead,
+                deposit.is_some(),
             )
         }
         None => {
@@ -1381,7 +1563,7 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
         }
     };
     let readout = current.filter(|_| state.sim.active());
-    overlay(&painter, rect, toolpath, readout, &palette);
+    overlay(&painter, rect, toolpath, readout, deposit, &palette);
     view_cube(ui, &painter, state, rect, &palette);
     picked
 }
@@ -1446,9 +1628,7 @@ fn toolbar(ui: &mut Ui, state: &mut ViewState, total: usize) {
         ui.checkbox(&mut state.sim.show_trace, "Traçado")
             .on_hover_text("Mostrar a trajetória da tocha");
         ui.checkbox(&mut state.sim.show_weld, "Solda")
-            .on_hover_text(
-                "Mostrar o cordão depositado em 3D (largura do cordão e altura da camada)",
-            );
+            .on_hover_text("Mostrar o material depositado: a cor mostra onde a camada sobe mais");
         ui.separator();
         ui.label("Velocidade:");
         let mut idx = state.sim.speed_index();
@@ -1639,9 +1819,10 @@ impl Style {
 /// [`rotate_part`] antes de ser projetado, de modo que o ponto sendo
 /// depositado fique no topo, sob a tocha (0.0 em chapa plana e bolacha).
 /// Com "Solda" ligada e `bead` presente, o perfil 3D do cordão
-/// ([`bead_mesh`]) é desenhado antes do traçado. `pointer` é a posição de um
-/// clique neste quadro; devolve a linha do ponto mais próximo dele, se ficou
-/// a menos de [`PICK_RADIUS`].
+/// ([`bead_mesh`]) é desenhado antes do traçado. Com `surface` ligada, a
+/// superfície real já foi desenhada e o traçado sai, porque atravessaria a peça.
+/// `pointer` é a posição de um clique neste quadro; devolve a linha do ponto
+/// mais próximo dele, se ficou a menos de [`PICK_RADIUS`].
 #[allow(clippy::too_many_arguments)]
 fn draw_path(
     painter: &Painter,
@@ -1654,6 +1835,7 @@ fn draw_path(
     stick: f32,
     rotation: f32,
     bead: Option<BeadShape>,
+    surface: bool,
 ) -> Option<usize> {
     let total = tp.point_count();
     if total == 0 {
@@ -1661,7 +1843,8 @@ fn draw_path(
     }
     let step = decimation_step(total);
     let limit = draw_limit(&state.sim, total);
-    let (show_trace, show_weld) = (state.sim.show_trace, state.sim.show_weld);
+    let show_trace = state.sim.show_trace && !surface;
+    let show_weld = state.sim.show_weld;
     if let (true, Some(bead)) = (show_weld, bead) {
         let mesh = bead_mesh(proj, tp, limit, rotation, bead, palette);
         if !mesh.is_empty() {
@@ -1782,6 +1965,67 @@ fn flush_run(painter: &Painter, points: &[Pos2], style: Option<Style>, palette: 
     }
 }
 
+/// Números do depósito e a escala de cor, no canto inferior esquerdo.
+fn deposit_legend(painter: &Painter, rect: Rect, m: &DepositModel, palette: &Palette) {
+    let font = FontId::proportional(11.0);
+    let r = &m.report;
+    let mut lines = vec![
+        format!(
+            "Altura: mín {:.2} · média {:.2} · máx {:.2} mm",
+            r.min_mm, r.mean_mm, r.max_mm
+        ),
+        format!(
+            "Sobremetal {:.2} mm · {:.1} cm³ · solda {:.1} min",
+            r.sobremetal_mm,
+            r.volume_mm3 / 1000.0,
+            r.weld_min
+        ),
+    ];
+    if let Some(b) = &m.base {
+        lines.push(format!(
+            "Sem compensação: {:.2} mm · {:.1} cm³ · {:.1} min",
+            b.sobremetal_mm,
+            b.volume_mm3 / 1000.0,
+            b.weld_min
+        ));
+    }
+    if r.uncovered_pct > 0.5 {
+        lines.push(format!("Sem material em {:.1}% da área", r.uncovered_pct));
+    }
+    let left = rect.left() + 8.0;
+    let mut y = rect.bottom() - 24.0;
+    for line in lines.iter().rev() {
+        painter.text(
+            pos2(left, y),
+            Align2::LEFT_BOTTOM,
+            line,
+            font.clone(),
+            palette.text,
+        );
+        y -= 15.0;
+    }
+    // Escala de cor: da altura mais baixa à mais alta.
+    let (first, last) = (HEAT_STOPS[0].0, HEAT_STOPS[HEAT_STOPS.len() - 1].0);
+    let (w, h) = (2.0, 8.0);
+    for i in 0..60 {
+        let t = first + (last - first) * i as f32 / 59.0;
+        let at = pos2(left + i as f32 * w, y - h - 2.0);
+        painter.rect_filled(
+            Rect::from_min_size(at, vec2(w, h)),
+            CornerRadius::ZERO,
+            heat_color(t),
+        );
+    }
+    let label_y = y - h - 4.0;
+    for (x, text, align) in [
+        (left, "baixo", Align2::LEFT_BOTTOM),
+        (left + 60.0, "alvo", Align2::CENTER_BOTTOM),
+        (left + 120.0, "alto", Align2::RIGHT_BOTTOM),
+    ] {
+        painter.text(pos2(x, label_y), align, text, font.clone(), palette.muted);
+    }
+}
+
 /// Textos sobre o viewport: resumo e, durante a simulação, a leitura da
 /// máquina (acima, à esquerda: X da tocha e ângulo A da peça), aviso de
 /// decimação (abaixo, à esquerda) e dica de uso (abaixo, à direita). O canto
@@ -1791,10 +2035,14 @@ fn overlay(
     rect: Rect,
     toolpath: Option<&Toolpath>,
     current: Option<&PathPoint>,
+    deposit: Option<&DepositModel>,
     palette: &Palette,
 ) {
     let font = FontId::proportional(11.0);
     let pad = vec2(8.0, 6.0);
+    if let Some(m) = deposit {
+        deposit_legend(painter, rect, m, palette);
+    }
     if let Some(pt) = current {
         painter.text(
             rect.left_top() + vec2(pad.x, pad.y + 16.0),
@@ -2259,6 +2507,7 @@ mod tests {
                 5.0,
                 0.0,
                 None,
+                false,
             );
         });
         // Sem renderizador ninguém aplica o atlas de fontes: o egui exige
@@ -2297,6 +2546,100 @@ mod tests {
             Shape::Circle(c) => circles.push((c.center, c.fill.to_array())),
             Shape::Text(t) => texts.push(t.galley.text().to_owned()),
             _ => {}
+        }
+    }
+
+    /// Modelo de depósito da espiral com o fechamento uniforme.
+    fn deposit_scene() -> (Params, Toolpath, tfm_core::deposit::DepositModel) {
+        let p = Params {
+            fechamento_uniforme: true,
+            ..Params::default()
+        };
+        let lines = tfm_core::gcode::generate(&p).unwrap_or_else(|e| panic!("{e}"));
+        let tp = tfm_core::toolpath::build_toolpath(&lines, &p);
+        let q = tfm_core::deposit::flow_rate(&tp, &p);
+        let m = tfm_core::deposit::simulate(&tp, &p, q)
+            .unwrap_or_else(|| panic!("a espiral deveria ter mapa"));
+        (p, tp, m)
+    }
+
+    /// A cor mostra a altura relativa à média: frio abaixo, verde no alvo,
+    /// quente onde sobe mais.
+    #[test]
+    fn heat_color_runs_from_low_to_high() {
+        let [r0, _, b0, _] = heat_color(0.1).to_array();
+        assert!(b0 > r0, "abaixo do alvo deveria ser azul");
+        let [r1, g1, _, _] = heat_color(1.0).to_array();
+        assert!(g1 > r1, "no alvo deveria ser verde");
+        let [r2, g2, _, _] = heat_color(3.0).to_array();
+        assert!(r2 > g2 * 2, "acima do alvo deveria ser vermelho");
+        assert_eq!(heat_color(0.1), heat_color(0.2), "satura embaixo");
+        assert_eq!(heat_color(3.0), heat_color(4.0), "satura em cima");
+    }
+
+    /// A superfície real sai como malha, só do lado virado para a câmera.
+    #[test]
+    fn surface_mesh_draws_only_the_visible_side() {
+        let (_, tp, m) = deposit_scene();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let mut cam = Camera::default();
+        cam.fit(tp.min, tp.max);
+        let proj = Projector::new(&cam, rect);
+        let mesh = surface_mesh(&proj, &m.map, m.report.mean_mm, 0.0, false);
+        assert!(!mesh.is_empty(), "a superfície deveria aparecer");
+        let quads = mesh.indices.len() / 6;
+        let total = m.map.nx * m.map.na;
+        assert!(
+            quads > total / 5 && quads < total * 3 / 5,
+            "{quads} quadriláteros de {total}"
+        );
+        // Sem material não há o que desenhar.
+        let vazio = m.map.empty_like();
+        let mesh = surface_mesh(&proj, &vazio, 1.0, 0.0, false);
+        assert!(mesh.indices.is_empty());
+    }
+
+    /// Durante a simulação o mapa cresce com o progresso; voltando para trás
+    /// ele recomeça e dá o mesmo resultado.
+    #[test]
+    fn partial_map_follows_the_simulation() {
+        let (_, _, m) = deposit_scene();
+        let soma = |map: &tfm_core::deposit::HeightMap| map.heights.iter().sum::<f32>();
+        let mut state = ViewState::default();
+        let meio = soma(state.partial_map(7, &m, m.points / 2));
+        let fim = soma(state.partial_map(7, &m, m.points));
+        assert!(meio > 0.2 * fim && meio < 0.8 * fim, "{meio} de {fim}");
+        assert!((fim / soma(&m.map) - 1.0).abs() < 1e-3);
+        let de_novo = soma(state.partial_map(7, &m, m.points / 2));
+        assert!((de_novo / meio - 1.0).abs() < 1e-3, "{de_novo} vs {meio}");
+        // Resultado novo não herda o mapa do anterior.
+        let zero = soma(state.partial_map(8, &m, 0));
+        assert_eq!(zero, 0.0);
+    }
+
+    /// Os números do depósito aparecem sobre a vista, com a comparação quando
+    /// a compensação está ligada.
+    #[test]
+    fn overlay_reports_the_deposit_numbers() {
+        let (_, tp, mut m) = deposit_scene();
+        m.base = Some(m.report);
+        let palette = Palette::light();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            overlay(&painter, rect, Some(&tp), None, Some(&m), &palette);
+        });
+        output.textures_delta.clear();
+        let (mut circles, mut texts) = (Vec::new(), Vec::new());
+        for clipped in &output.shapes {
+            collect_shapes(&clipped.shape, &mut circles, &mut texts);
+        }
+        for want in ["Altura:", "Sobremetal", "Sem compensação:"] {
+            assert!(
+                texts.iter().any(|t| t.starts_with(want)),
+                "{want} ausente: {texts:?}"
+            );
         }
     }
 
@@ -2733,7 +3076,7 @@ mod tests {
         let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
             draw_path(
-                &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, 0.0, bead,
+                &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, 0.0, bead, false,
             );
         });
         output.textures_delta.clear();
@@ -2929,9 +3272,9 @@ mod tests {
         let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
             draw_path(
-                &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, cur.a_deg, None,
+                &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, cur.a_deg, None, false,
             );
-            overlay(&painter, rect, Some(&tp), Some(&cur), &palette);
+            overlay(&painter, rect, Some(&tp), Some(&cur), None, &palette);
         });
         output.textures_delta.clear();
 

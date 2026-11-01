@@ -24,7 +24,8 @@ Visão geral, build, testes e fixtures golden estão no [`README.md`](../README.
 | `overlap.rs` | Modelo de sobreposição efetiva do cordão (passo, largura efetiva, nº de passes); porta literal de `overlap_model.py`. |
 | `gcode/mod.rs` | `generate()`, `generate_with_timestamp()`, `GenError`; valida, normaliza e despacha para o módulo do modo. |
 | `gcode/common.rs` | Cabeçalho e rodapé, sequências de tocha (M101/M102 e atrasos), formatação numérica igual à do Python, geometria rotativa. |
-| `gcode/spiral.rs` | Modo Espiral (hélice X+A por camada, externo ou interno); com `fechamento_uniforme`, material de borda a borda, voltas inteiras e anéis nas pontas (`overlap::uniform_closing`). |
+| `deposit.rs` | Simulação do material depositado: mapa de altura `h(X, A)` por `vazão × tempo`, relatório de alturas e sobremetal e cálculo da compensação de rotação. |
+| `gcode/spiral.rs` | Modo Espiral (hélice X+A por camada, externo ou interno); com `fechamento_uniforme`, material de borda a borda, voltas inteiras e anéis nas pontas (`overlap::uniform_closing`); com `compensar_rotacao`, `F` por trecho (`deposit::solve_feed_factors`). |
 | `gcode/multiperfil.rs` | Modo Espiral Multiperfil (vários perfis por setor, formas retangular/trapezoidal/triangular, estratégias). |
 | `gcode/bolacha.rs` | Modo Bolacha (face circular: anéis ou espiral, com paradas). |
 | `gcode/flat_plate.rs` | Modo Chapa Plana (cordões retos em X ou Y, zigue-zague ou unidirecional, lead-in/out). |
@@ -57,7 +58,7 @@ Testes de integração em `crates/tfm-core/tests/`: `golden.rs` (paridade com as
 | `widgets.rs` | Widgets reutilizáveis: campos com rótulo e tooltip, seções, KPIs. |
 | `icons.rs` | Ícones das sete operações desenhados com `Painter` (porta dos Canvas do Tk). |
 | `integration.rs` | Ações: gerar o `.tap` (com alerta G53), abrir no Mach3, salvar/carregar procedimento, atalhos de teclado. |
-| `view3d.rs` | 3D interativo: câmera orbital, grade, eixos na origem, silhueta da peça (comprimento a revestir), trajetória por camada, perfil 3D do cordão ("Solda": malha com largura e altura, sombreada, faces de costas descartadas), cubo de orientação (faces clicáveis, arestas e cantos, ⌂), presets de vista e simulação. Nas operações cilíndricas a peça gira em torno do eixo A sob a tocha fixa. |
+| `view3d.rs` | 3D interativo: câmera orbital, grade, eixos na origem, silhueta da peça (comprimento a revestir), trajetória por camada, superfície real do depósito ("Solda": mapa de altura colorido, que sobe com a simulação, com a legenda dos números; chapa e bolacha usam o perfil do cordão), cubo de orientação (faces clicáveis, arestas e cantos, ⌂), presets de vista e simulação. Nas operações cilíndricas a peça gira em torno do eixo A sob a tocha fixa. |
 | `charts.rs` | Gráficos do centro: Análise Temporal, Oscilação, Estatísticas e o dashboard de Processo. |
 | `panels/mod.rs` | Declara os quatro painéis fixos. |
 | `panels/left.rs` | Painel esquerdo: cartão e lista de operações, abas Parâmetros / Processo / Rastreabilidade. |
