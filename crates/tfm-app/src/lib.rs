@@ -4,6 +4,7 @@
 //! layout ficam aqui, em [`app::TfmApp`].
 
 pub mod app;
+pub mod charts;
 pub mod compute;
 pub mod dialogs;
 pub mod icons;
