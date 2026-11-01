@@ -252,12 +252,25 @@ pub fn write_autoload(dir: &Path, file: &Path) -> io::Result<()> {
 /// Regrava o `autoload.txt` depois de `delay`, numa thread, para o macropump
 /// ler depois que o Mach3 subiu.
 fn schedule_autoload_rewrite(dir: PathBuf, file: PathBuf, delay: Duration) {
-    thread::spawn(move || {
-        thread::sleep(delay);
-        if let Err(err) = write_autoload(&dir, &file) {
-            log::warn!("autoload.txt não regravado em {}: {err}", dir.display());
-        }
-    });
+    let (dir_now, file_now) = (dir.clone(), file.clone());
+    let spawned = thread::Builder::new()
+        .name("tfm-autoload".to_string())
+        .spawn(move || {
+            thread::sleep(delay);
+            rewrite_autoload(&dir, &file);
+        });
+    // Sem thread, regrava já (o `except: _rewrite_autoload()` do Python).
+    if let Err(err) = spawned {
+        log::warn!("Thread do autoload não iniciou: {err}; regravando agora");
+        rewrite_autoload(&dir_now, &file_now);
+    }
+}
+
+/// Regrava o `autoload.txt`, só registrando a falha.
+fn rewrite_autoload(dir: &Path, file: &Path) {
+    if let Err(err) = write_autoload(dir, file) {
+        log::warn!("autoload.txt não regravado em {}: {err}", dir.display());
+    }
 }
 
 /// Abre o arquivo pela associação do Windows (`os.startfile`); se falhar,
@@ -277,10 +290,18 @@ fn open_with_association(file: &Path) {
 
 /// Abre o `.tap` pela associação depois de `delay`, numa thread.
 fn schedule_open_with_association(file: PathBuf, delay: Duration) {
-    thread::spawn(move || {
-        thread::sleep(delay);
-        open_with_association(&file);
-    });
+    let file_now = file.clone();
+    let spawned = thread::Builder::new()
+        .name("tfm-abrir-tap".to_string())
+        .spawn(move || {
+            thread::sleep(delay);
+            open_with_association(&file);
+        });
+    // Sem thread, abre já (o `except: _startfile_later()` do Python).
+    if let Err(err) = spawned {
+        log::warn!("Thread de abertura do .tap não iniciou: {err}; abrindo agora");
+        open_with_association(&file_now);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -306,6 +327,20 @@ fn current_gcode(app: &TfmApp, params: &Params) -> Result<Vec<String>, String> {
     Ok(lines)
 }
 
+/// Primeiro portão do Python: `_get_current_params()` devolvia `None` quando
+/// algum texto não convertia (`float()` falhou) e a ação era recusada com
+/// "Por favor, verifique os parâmetros.". Aqui `to_params` usaria o padrão
+/// do campo, então gerar/salvar/abrir precisam checar isto antes.
+fn fields_ok(app: &mut TfmApp) -> bool {
+    let bad = app.ui.unparsable_fields();
+    if bad.is_empty() {
+        return true;
+    }
+    log::warn!("Ação recusada: campos não numéricos: {}", bad.join(", "));
+    app.notify(NotifyKind::Erro, "Por favor, verifique os parâmetros.");
+    false
+}
+
 // ---------------------------------------------------------------------------
 // Gerar G-code (.tap)
 // ---------------------------------------------------------------------------
@@ -315,6 +350,9 @@ fn current_gcode(app: &TfmApp, params: &Params) -> Result<Vec<String>, String> {
 /// 3834), gera, pede o arquivo e grava — ou deixa a gravação pendente do
 /// alerta G53 ([`show_modals`]).
 pub fn generate_tap(app: &mut TfmApp) {
+    if !fields_ok(app) {
+        return;
+    }
     let params = app.current_params();
 
     let errors = validate_physical(&params).errors;
@@ -442,6 +480,9 @@ pub fn show_modals(app: &mut TfmApp, ctx: &egui::Context) {
 /// o `autoload.txt` (se ligado), garante os macros e inicia o
 /// `Mach3.exe /p <perfil> <arquivo>` com a pasta do Mach3 como `cwd`.
 pub fn open_in_mach3(app: &mut TfmApp) {
+    if !fields_ok(app) {
+        return;
+    }
     let params = app.current_params();
     let lines = match current_gcode(app, &params) {
         Ok(lines) => lines,
@@ -573,6 +614,9 @@ fn ensure_macros(app: &mut TfmApp, cfg: &Integration) {
 /// os parâmetros atuais como JSON (chaves do Python) na pasta de
 /// procedimentos.
 pub fn save_procedure_dialog(app: &mut TfmApp) {
+    if !fields_ok(app) {
+        return;
+    }
     let dir = app.cfg.procedures_dir();
     if let Err(err) = fs::create_dir_all(&dir) {
         log::warn!("Pasta de procedimentos {} não criada: {err}", dir.display());
@@ -619,12 +663,9 @@ pub fn load_procedure_file(app: &mut TfmApp, path: &Path) {
         Ok(params) => {
             apply_loaded_params(&mut app.ui, &params);
             log::info!("Procedimento carregado de {}", path.display());
-            app.notify(NotifyKind::Sucesso, "Procedimento carregado.");
+            app.notify(NotifyKind::Sucesso, "Procedimento carregado com sucesso!");
         }
-        Err(err) => app.notify(
-            NotifyKind::Erro,
-            format!("Erro ao carregar procedimento: {err}"),
-        ),
+        Err(err) => app.notify(NotifyKind::Erro, format!("Erro ao carregar: {err}")),
     }
 }
 

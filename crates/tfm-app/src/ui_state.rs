@@ -534,6 +534,22 @@ impl UiState {
         self.convert(Some(cfg)).0
     }
 
+    /// Chaves cujo texto **não converte** (só as falhas de `parse`, sem as
+    /// regras físicas), na ordem dos campos. É o caso em que o
+    /// `_get_current_params()` do Python devolvia `None` e os botões
+    /// recusavam com "Por favor, verifique os parâmetros."; aqui
+    /// [`UiState::to_params`] usa o padrão do campo, então quem vai gravar
+    /// ou gerar deve consultar isto antes. Vazio = tudo converte.
+    pub fn unparsable_fields(&self) -> Vec<&'static str> {
+        let invalid = self.convert(None).1;
+        NUM_FIELDS
+            .iter()
+            .map(|f| f.key)
+            .chain(INT_FIELDS.iter().map(|f| f.key))
+            .filter(|key| invalid.contains(key))
+            .collect()
+    }
+
     /// Chaves a pintar de vermelho: texto que não converte mais os campos
     /// por trás das regras físicas violadas (`validate_physical`).
     pub fn invalid_fields(&self, cfg: &AppConfig) -> HashSet<&'static str> {
@@ -942,5 +958,32 @@ mod tests {
         assert!(has_advanced(Operation::Bolacha));
         assert!(!has_advanced(Operation::ChapaPlana));
         assert!(!has_advanced(Operation::OscilacaoLinear));
+    }
+
+    /// `unparsable_fields` só lista texto que não converte: um valor
+    /// fisicamente inválido mas numérico (sobreposição 150%) pinta o campo
+    /// (`invalid_fields`) mas não bloqueia como "verifique os parâmetros".
+    #[test]
+    fn unparsable_fields_exclude_physical_rules() {
+        let cfg = cfg();
+        let mut s = UiState::default();
+        assert!(s.unparsable_fields().is_empty());
+
+        s.fields.insert("sobreposicao", "150".to_string());
+        assert!(s.unparsable_fields().is_empty(), "150 converte");
+        assert!(s.invalid_fields(&cfg).contains("sobreposicao"));
+
+        s.fields.insert("diametro", "abc".to_string());
+        s.fields.insert("num_camadas", "1.5".to_string());
+        assert_eq!(s.unparsable_fields(), ["diametro", "num_camadas"]);
+        assert!(s.invalid_fields(&cfg).contains("diametro"));
+
+        // Lead inválido só conta com "Usar início e fim extra" ligado.
+        s.fields.insert("diametro", "50".to_string());
+        s.fields.insert("num_camadas", "2".to_string());
+        s.fields.insert("lead_in", "x".to_string());
+        assert!(s.unparsable_fields().is_empty());
+        s.flags.insert("lead_extras_enabled", true);
+        assert_eq!(s.unparsable_fields(), ["lead_in"]);
     }
 }
