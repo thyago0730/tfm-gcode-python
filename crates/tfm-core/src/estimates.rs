@@ -35,9 +35,10 @@ use crate::config::{AppConfig, MachineLimits};
 use crate::formula::{evaluate_block, formula_locals};
 use crate::gcode::common::{
     effective_base_diameter, overlap_metrics, profile_shape_str, py_max, py_min, py_or,
+    rotary_arc_bounds,
 };
 use crate::gcode::multiperfil::layer_profile_widths;
-use crate::overlap::Uniformity;
+use crate::overlap::{uniform_closing, UniformClosing, Uniformity};
 use crate::params::{BolachaTipo, OscillationType, Params, WeldingMode};
 use crate::quality::QualityManager;
 
@@ -339,8 +340,18 @@ fn overlap_results(p: &Params) -> OverlapResults {
         return multiperfil_overlap_results(p);
     }
     let layer_count = layer_count(p);
-    let first = overlap_metrics(p, 0, None, None);
-    let last = overlap_metrics(p, layer_count - 1, None, None);
+    let mut first = overlap_metrics(p, 0, None, None);
+    let mut last = overlap_metrics(p, layer_count - 1, None, None);
+    // Fechamento uniforme: o passo que sai no G-code é o redistribuído, então
+    // é ele que dá a sobreposição real.
+    if p.fechamento_uniforme && p.welding_mode == WeldingMode::Espiral {
+        for (m, layer) in [(&mut first, 0), (&mut last, layer_count - 1)] {
+            let passo = closing_plan(p, layer, m.step_over_mm).passo;
+            let largura = py_max(m.bead.effective_width_mm, 1e-6);
+            m.step_over_mm = passo;
+            m.achieved_overlap_pct = (1.0 - passo / largura).clamp(0.0, 0.99) * 100.0;
+        }
+    }
     let (first_eff, last_eff) = (first.bead.effective_width_mm, last.bead.effective_width_mm);
     let eff_min = py_min(first_eff, last_eff);
     let eff_max = py_max(first_eff, last_eff);
@@ -367,6 +378,15 @@ fn overlap_results(p: &Params) -> OverlapResults {
         uniformity: format!("{} | var {}%", level.label(), txt1(variation_pct)),
         uniformity_level: level,
     }
+}
+
+/// Plano do fechamento uniforme da camada `layer` com o passo `passo`.
+fn closing_plan(p: &Params, layer: i64, passo: f64) -> UniformClosing {
+    let bounds = rotary_arc_bounds(p);
+    let largura = overlap_metrics(p, layer, None, None)
+        .bead
+        .effective_width_mm;
+    uniform_closing(bounds.x_start, bounds.x_end, passo, largura)
 }
 
 /// `f"{lo:.2f}"` quando `abs(hi - lo) <= 0.05`, senão `f"{lo:.2f} - {hi:.2f}"`.
@@ -551,18 +571,20 @@ fn espiral(p: &Params, s: &Shared) -> ModeOutcome {
     let passo = steps.iter().sum::<f64>() / (steps.len().max(1) as f64);
     let passo = py_max(passo, 1e-6);
     let total_rotacoes_part = if s.h > 0.0 { s.h / passo } else { 0.0 };
-    // Fechamento uniforme: as voltas viram inteiras e o passo encolhe, como
-    // no G-code gerado.
-    let (passo, total_rotacoes_part) = if p.fechamento_uniforme && s.h > 0.0 {
-        crate::overlap::uniform_closing(s.h, passo)
+    // Fechamento uniforme: voltas inteiras no curso do centro do cordão, como
+    // no G-code gerado (esse curso já conta os leads).
+    let plano = (p.fechamento_uniforme && s.h > 0.0).then(|| closing_plan(p, 0, passo));
+    let (passo, total_rotacoes_part) =
+        plano.map_or((passo, total_rotacoes_part), |c| (c.passo, c.voltas));
+    let leads = if plano.is_some() {
+        0.0
     } else {
-        (passo, total_rotacoes_part)
+        s.lead_in + s.lead_out
     };
     let angulo_part = total_rotacoes_part * 360.0 + 720.0;
     let comprimento_helice_por_volta = (s.circunferencia.powi(2) + passo.powi(2)).sqrt();
     let comprimento_total_helice = total_rotacoes_part * comprimento_helice_por_volta;
-    let comprimento_total_mov =
-        comprimento_total_helice + (s.lead_in + s.lead_out) + (2.0 * s.circunferencia);
+    let comprimento_total_mov = comprimento_total_helice + leads + (2.0 * s.circunferencia);
     let (rot_min_por_volta, rpm_check) = helix_rates(comprimento_helice_por_volta, s.taxa);
     let tempo_min_arc = if s.taxa > 0.0 {
         comprimento_total_mov / s.taxa

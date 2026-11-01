@@ -81,9 +81,11 @@ mod tip {
         "Reveste o diâmetro interno; a tocha entra pela face e Z cresce para dentro.";
     pub const AFASTAMENTO_FACE: &str =
         "Posição X segura fora da peça para entrar e sair em operações internas.";
-    pub const FECHAMENTO_UNIFORME: &str = "Arredonda as voltas para um número inteiro e \
-        redistribui o passo no comprimento, para a última passada terminar em volta cheia, sem \
-        ângulo aberto. A sobreposição só aumenta; o passo real aparece nos resultados.";
+    pub const FECHAMENTO_UNIFORME: &str = "O comprimento passa a valer de borda a borda do \
+        material depositado: o centro do cordão anda meia largura para dentro de cada lado e as \
+        voltas viram inteiras nesse curso. Na Espiral, cada ponta fecha num anel de 360° (já \
+        inclui \"Fechar início/fim\"). A sobreposição só aumenta; o passo real aparece nos \
+        resultados.";
     pub const FECHAR_PONTAS: &str =
         "Dá uma volta completa parada no início e no fim para fechar o cordão.";
     pub const RECUAR: &str = "Vai ao Z e Y zero máquina (G53) antes de ligar a tocha.";
@@ -488,7 +490,7 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                 );
                 f.flag(
                     ui,
-                    "Fechamento uniforme (volta inteira)",
+                    "Fechamento uniforme (borda a borda)",
                     "fechamento_uniforme",
                     tip::FECHAMENTO_UNIFORME,
                 );

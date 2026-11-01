@@ -347,9 +347,9 @@ pub struct Params {
     // --- Espiral / chapa / interno -----------------------------------------
     #[serde(deserialize_with = "lenient_bool")]
     pub spiral_close_ends: bool,
-    /// Fechamento uniforme da espiral: arredonda as voltas para um número
-    /// inteiro e redistribui o passo, para a última passada terminar em
-    /// volta cheia (ver `overlap::uniform_closing`). Não existia no Python.
+    /// Fechamento uniforme: o comprimento vale de borda a borda do material,
+    /// com voltas inteiras no curso do centro do cordão e, na espiral, anéis
+    /// nas pontas (ver `overlap::uniform_closing`). Não existia no Python.
     #[serde(deserialize_with = "lenient_bool")]
     pub fechamento_uniforme: bool,
     #[serde(deserialize_with = "lenient_bool")]

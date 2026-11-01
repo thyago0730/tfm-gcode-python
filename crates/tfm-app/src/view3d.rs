@@ -29,6 +29,7 @@ use egui::{
     pos2, vec2, Align2, Color32, CornerRadius, FontId, Id, Mesh, Painter, PointerButton, Pos2,
     Rect, Response, Sense, Shape, Slider, Stroke, Ui, Vec2,
 };
+use tfm_core::gcode::common::overlap_metrics;
 use tfm_core::params::{Direction, FlatOrientation, Operation, Params, WeldingMode};
 use tfm_core::toolpath::{PathPoint, Toolpath, Vec3};
 
@@ -785,13 +786,16 @@ impl Surface {
     }
 }
 
-/// Seção do cordão: largura ("Largura Cordão") e altura ("Espessura /
-/// Camada"), sobre a superfície da operação.
+/// Seção do cordão: largura efetiva do motor (a mesma do cálculo do passo) e
+/// altura ("Espessura / Camada"), sobre a superfície da operação.
+/// `include_tail` conta o trecho de apagamento como material: no fechamento
+/// uniforme o anel só fecha com ele.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct BeadShape {
     width: f32,
     height: f32,
     surface: Surface,
+    include_tail: bool,
 }
 
 impl BeadShape {
@@ -803,10 +807,12 @@ impl BeadShape {
                 internal: p.is_internal(),
             },
         };
+        let width = overlap_metrics(p, 0, None, None).bead.effective_width_mm;
         BeadShape {
-            width: finite_or(p.largura_cordao, 8.0).max(0.2),
+            width: finite_or(width, 8.0).max(0.2),
             height: finite_or(p.espessura_camada, 1.5).max(0.05),
             surface,
+            include_tail: p.fechamento_uniforme,
         }
     }
 }
@@ -838,6 +844,7 @@ fn bead_mesh(
         add(scale(proj.basis.up, 0.6), scale(proj.basis.right, -0.4)),
     ));
     let half = bead.width * 0.5;
+    let deposits = |pt: &PathPoint| pt.torch_on || (bead.include_tail && pt.extinguishing);
     let mut consumed = 0usize;
     for seg in &tp.segments {
         if consumed >= limit {
@@ -849,7 +856,7 @@ fn bead_mesh(
         while k + stride < n {
             let (a, c) = (&pts[k], &pts[k + stride]);
             k += stride;
-            if !(a.torch_on && c.torch_on) || a.rapid || c.rapid {
+            if !(deposits(a) && deposits(c)) || a.rapid || c.rapid {
                 continue;
             }
             let pa = rotate_part(a.pos, rotation);
@@ -2603,6 +2610,7 @@ mod tests {
             a_deg: 0.0,
             feed: 100.0,
             torch_on,
+            extinguishing: false,
             rapid: false,
             layer: 0,
         };
@@ -2624,6 +2632,7 @@ mod tests {
             width: 8.0,
             height: 1.5,
             surface: Surface::Cylinder { internal: false },
+            include_tail: false,
         };
         let tp = bead_path(true);
         // Vista de topo: as duas facetas de cada trecho olham para a câmera.
@@ -2653,6 +2662,58 @@ mod tests {
         // Tocha desligada não deposita nada.
         let off = bead_mesh(&proj, &bead_path(false), 3, 0.0, bead, &palette);
         assert!(off.vertices.is_empty());
+    }
+
+    /// A largura desenhada é a efetiva do motor, a mesma do cálculo do passo
+    /// e das bordas, e o apagamento só conta no fechamento uniforme.
+    #[test]
+    fn bead_shape_uses_the_engine_width() {
+        let p = Params {
+            fechamento_uniforme: true,
+            ..Params::default()
+        };
+        let bead = BeadShape::from_params(&p);
+        let w = tfm_core::gcode::common::overlap_metrics(&p, 0, None, None)
+            .bead
+            .effective_width_mm;
+        assert!(
+            (bead.width as f64 - w).abs() < 1e-3,
+            "{} vs {w}",
+            bead.width
+        );
+        assert!(bead.include_tail);
+        assert!(!BeadShape::from_params(&Params::default()).include_tail);
+    }
+
+    /// No fechamento uniforme ainda sai material depois do M102: o trecho de
+    /// apagamento entra na malha, senão o anel desenhado ficaria aberto.
+    #[test]
+    fn bead_mesh_counts_the_extinguishing_stretch_when_closing() {
+        let palette = Palette::light();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let mut tp = bead_path(true);
+        tp.segments[0][2].torch_on = false;
+        tp.segments[0][2].extinguishing = true;
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Topo);
+        cam.target = Vec3::new(10.0, 0.0, 25.0);
+        cam.distance = 200.0;
+        let proj = Projector::new(&cam, rect);
+        let mut bead = BeadShape {
+            width: 8.0,
+            height: 1.5,
+            surface: Surface::Cylinder { internal: false },
+            include_tail: false,
+        };
+        assert_eq!(
+            bead_mesh(&proj, &tp, 3, 0.0, bead, &palette).vertices.len(),
+            8
+        );
+        bead.include_tail = true;
+        assert_eq!(
+            bead_mesh(&proj, &tp, 3, 0.0, bead, &palette).vertices.len(),
+            16
+        );
     }
 
     /// Com "Solda" ligada a trajetória vem com uma malha (o perfil 3D do

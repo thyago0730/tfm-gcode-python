@@ -277,21 +277,58 @@ pub fn compute_overlap_metrics(
     }
 }
 
-/// Fechamento uniforme da espiral: arredonda as voltas para cima até um
-/// número inteiro e redistribui o passo no comprimento, de modo que a espiral
-/// termine em volta cheia (sem o "ângulo aberto" da última passada). O passo
-/// nunca cresce, então a sobreposição só aumenta. Devolve `(passo, voltas)`;
-/// entradas não positivas ou não finitas voltam como vieram, com as voltas
-/// que elas dariam (0 quando o passo é inválido).
-pub fn uniform_closing(comprimento: f64, passo: f64) -> (f64, f64) {
-    if !(comprimento > 0.0 && passo > 0.0 && comprimento.is_finite() && passo.is_finite()) {
-        let voltas = if passo > 0.0 && comprimento.is_finite() && comprimento > 0.0 {
-            comprimento / passo
-        } else {
-            0.0
+/// Plano do fechamento uniforme: por onde o centro do cordão anda para o
+/// material depositado ocupar exatamente o trecho pedido.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct UniformClosing {
+    /// X inicial do centro do cordão.
+    pub x_start: f64,
+    /// X final do centro do cordão.
+    pub x_end: f64,
+    /// Passo axial redistribuído (mm).
+    pub passo: f64,
+    /// Voltas inteiras da hélice entre `x_start` e `x_end`.
+    pub voltas: f64,
+}
+
+/// Fechamento uniforme: `x_start..x_end` é o trecho de **material**, de borda
+/// a borda, e não a linha de centro. O centro do cordão recua meia `largura`
+/// de cada lado; no curso que sobra as voltas sobem até um inteiro e o passo
+/// é redistribuído, então ele nunca cresce e a sobreposição só aumenta. Peça
+/// mais estreita que o cordão fica com o centro no meio e sem hélice. Passo
+/// inválido volta como veio, com zero voltas; largura inválida conta como 0.
+pub fn uniform_closing(x_start: f64, x_end: f64, passo: f64, largura: f64) -> UniformClosing {
+    let largura = if largura.is_finite() {
+        largura.max(0.0)
+    } else {
+        0.0
+    };
+    let span = (x_end - x_start).abs();
+    if span <= largura {
+        let meio = (x_start + x_end) / 2.0;
+        return UniformClosing {
+            x_start: meio,
+            x_end: meio,
+            passo,
+            voltas: 0.0,
         };
-        return (passo, voltas);
     }
-    let voltas = (comprimento / passo - 1e-9).ceil().max(1.0);
-    (comprimento / voltas, voltas)
+    let recuo = if x_end < x_start {
+        -largura / 2.0
+    } else {
+        largura / 2.0
+    };
+    let curso = span - largura;
+    let (passo, voltas) = if passo > 0.0 && passo.is_finite() {
+        let voltas = (curso / passo - 1e-9).ceil().max(1.0);
+        (curso / voltas, voltas)
+    } else {
+        (passo, 0.0)
+    };
+    UniformClosing {
+        x_start: x_start + recuo,
+        x_end: x_end - recuo,
+        passo,
+        voltas,
+    }
 }

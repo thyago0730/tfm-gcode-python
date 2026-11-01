@@ -8,8 +8,8 @@ use std::f64::consts::PI;
 
 use super::common::{
     append_torch_disable, append_torch_enable, build_footer, build_header, direction_str,
-    effective_base_diameter, f1, f3, fechamento_uniforme_comment, layer_separator, overlap_metrics,
-    py_max, rotary_arc_bounds, Pos,
+    effective_base_diameter, extinguish_arc_deg, f1, f3, fechamento_uniforme_comment,
+    layer_separator, overlap_metrics, py_max, rotary_arc_bounds, Pos,
 };
 use super::GenError;
 use crate::overlap::uniform_closing;
@@ -46,18 +46,27 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let direction = direction_str(p.direcao_soldagem);
     let taxa_de_deposicao = p.taxa();
     let bounds = rotary_arc_bounds(p);
-    let x_arc_start_calc = bounds.x_start;
-    let x_arc_end_calc = bounds.x_end;
-
-    let comprimento_total_arc = (x_arc_end_calc - x_arc_start_calc).abs();
     let metrics = overlap_metrics(p, layer_num, Some(current_d), None);
     let passo = metrics.step_over_mm;
-    // Fechamento uniforme: voltas inteiras e passo redistribuído, para a
-    // passada terminar em volta cheia; desligado, é o cálculo do Python.
-    let (passo, total_rotacoes) = if p.fechamento_uniforme {
-        uniform_closing(comprimento_total_arc, passo)
-    } else {
-        (passo, comprimento_total_arc / passo)
+    // Fechamento uniforme: o comprimento vale de borda a borda do material,
+    // então o centro do cordão recua meia largura de cada lado e as voltas
+    // viram inteiras nesse curso. Desligado, é o cálculo do Python.
+    let plano = p.fechamento_uniforme.then(|| {
+        uniform_closing(
+            bounds.x_start,
+            bounds.x_end,
+            passo,
+            metrics.bead.effective_width_mm,
+        )
+    });
+    let (x_arc_start_calc, x_arc_end_calc, passo, total_rotacoes) = match &plano {
+        Some(c) => (c.x_start, c.x_end, c.passo, c.voltas),
+        None => (
+            bounds.x_start,
+            bounds.x_end,
+            passo,
+            (bounds.x_end - bounds.x_start).abs() / passo,
+        ),
     };
     let rotation_sign = p.rotation_sign();
     let angulo_total_a = total_rotacoes * 360.0 * rotation_sign;
@@ -76,8 +85,8 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
         format!("(--- CAMADA {} ---)", layer_num + 1),
         format!("(SENTIDO: {direction})"),
     ];
-    if p.fechamento_uniforme {
-        seg.push(fechamento_uniforme_comment(total_rotacoes, passo));
+    if let Some(c) = &plano {
+        seg.push(fechamento_uniforme_comment(c));
     }
     seg.push(format!("G00 Z{}", f3(z_seguranca)));
     seg.push(format!("G00 X{} A0", f3(x_arc_start_calc)));
@@ -87,7 +96,9 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     }
     append_torch_enable(&mut seg, p);
 
-    let fechar = p.spiral_close_ends;
+    // Sem o anel a hélice só toca a borda em um ponto da volta: o fechamento
+    // uniforme sempre fecha as duas pontas.
+    let fechar = p.spiral_close_ends || p.fechamento_uniforme;
     let volta_fechamento = if fechar { rotation_sign * 360.0 } else { 0.0 };
     if fechar {
         let volta_a_ini = rotation_sign * 360.0;
@@ -104,7 +115,15 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let mut tail_start = Pos::xa(x_arc_start_calc, volta_fechamento);
     let mut tail_end = Pos::xa(end_x, end_a);
     if fechar {
-        let volta_a_fim = end_a + rotation_sign * 360.0;
+        // No fechamento uniforme o material ainda sai durante o apagamento:
+        // o M102 vem antes, para o cordão terminar quando o anel fecha 360°.
+        let arco_final = if p.fechamento_uniforme {
+            let raio = py_max(current_d, 1e-6) / 2.0;
+            py_max(360.0 - extinguish_arc_deg(p, taxa_de_deposicao, raio), 0.0)
+        } else {
+            360.0
+        };
+        let volta_a_fim = end_a + rotation_sign * arco_final;
         seg.push(format!("G01 F{} A{}", f1(feed_angular), f3(volta_a_fim)));
         tail_start = Pos::xa(end_x, end_a);
         tail_end = Pos::xa(end_x, volta_a_fim);

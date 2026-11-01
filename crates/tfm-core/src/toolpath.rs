@@ -33,6 +33,8 @@ const STEP_DEG: f64 = 5.0;
 const RADIUS_EPS: f64 = 0.001;
 /// Prefixo do comentário que o gerador escreve no início de cada camada.
 const LAYER_MARKER: &str = "(--- CAMADA";
+/// Comentário que precede o movimento de apagamento da tocha.
+const EXTINGUISH_MARKER: &str = "(APAGAMENTO DA TOCHA";
 
 /// Vetor 3D simples, compartilhado com a interface.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -86,6 +88,9 @@ pub struct PathPoint {
     pub feed: f32,
     /// Estado da tocha na linha: `M101` liga, `M102` desliga.
     pub torch_on: bool,
+    /// Trecho de apagamento: o `M102` já saiu, mas ainda há material saindo
+    /// até o fim do movimento marcado com `(APAGAMENTO DA TOCHA`.
+    pub extinguishing: bool,
     /// `true` para pontos de `G0`/`G00`.
     pub rapid: bool,
     /// Camada: quantos `(--- CAMADA` apareceram antes da linha (0 antes do
@@ -180,6 +185,7 @@ struct Frame {
     line_idx: usize,
     feed: f64,
     torch_on: bool,
+    extinguishing: bool,
     rapid: bool,
     layer: usize,
 }
@@ -193,6 +199,7 @@ impl Frame {
             a_deg: a_deg as f32,
             feed: self.feed as f32,
             torch_on: self.torch_on,
+            extinguishing: self.extinguishing,
             rapid: self.rapid,
             layer: self.layer,
         }
@@ -321,6 +328,7 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
 
     let mut machine = Machine::default();
     let mut torch_on = false;
+    let mut extinguishing = false;
     let mut layer = 0usize;
     let mut out = Builder::default();
 
@@ -329,11 +337,14 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
         if line.is_empty() || line.starts_with('(') || line.starts_with('%') {
             if line.starts_with(LAYER_MARKER) {
                 layer += 1;
+            } else if line.starts_with(EXTINGUISH_MARKER) {
+                extinguishing = true;
             }
             continue;
         }
         if line.starts_with("M101") {
             torch_on = true;
+            extinguishing = false;
             continue;
         }
         if line.starts_with("M102") {
@@ -368,8 +379,10 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
             }
         }
         let Some(rapid) = motion else { continue };
+        extinguishing = extinguishing && !rapid;
         let frame = Frame {
             line_idx,
+            extinguishing,
             feed: machine.f,
             torch_on,
             rapid,

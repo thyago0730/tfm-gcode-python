@@ -12,10 +12,10 @@
 
 use std::f64::consts::PI;
 
-use super::common::fechamento_uniforme_comment;
 use super::common::{
     append_torch_disable, append_torch_enable, build_footer, build_header, effective_base_diameter,
-    f1, f3, f3s, overlap_metrics, profile_shape_str, py_max, py_min, py_or, rotary_arc_bounds, Pos,
+    f1, f3, f3s, fechamento_uniforme_comment, overlap_metrics, profile_shape_str, py_max, py_min,
+    py_or, rotary_arc_bounds, Pos,
 };
 use super::GenError;
 use crate::overlap::uniform_closing;
@@ -301,15 +301,23 @@ fn build_layer(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let taxa_de_deposicao = p.taxa();
     let pitch = py_max(py_or(p.multiperfil_pitch_mm, 0.0), 1e-6);
     let bounds = rotary_arc_bounds(p);
-    let x_arc_start_calc = bounds.x_start;
-    let x_arc_end_calc = bounds.x_end;
-    let comprimento_total_arc = (x_arc_end_calc - x_arc_start_calc).abs();
-    // Fechamento uniforme: voltas inteiras e passo redistribuído, para cada
-    // perfil terminar em volta cheia; desligado, é o cálculo do Python.
-    let (pitch, total_rotacoes) = if p.fechamento_uniforme {
-        uniform_closing(comprimento_total_arc, pitch)
-    } else {
-        (pitch, comprimento_total_arc / pitch)
+    // Fechamento uniforme: o comprimento vale de borda a borda do material, e
+    // as voltas viram inteiras no curso do centro. Sem anéis aqui: um por
+    // subpasse empilharia material nas pontas. Desligado, é o cálculo do Python.
+    let plano = p.fechamento_uniforme.then(|| {
+        let largura = overlap_metrics(p, layer_num, Some(current_d), None)
+            .bead
+            .effective_width_mm;
+        uniform_closing(bounds.x_start, bounds.x_end, pitch, largura)
+    });
+    let (x_arc_start_calc, x_arc_end_calc, pitch, total_rotacoes) = match &plano {
+        Some(c) => (c.x_start, c.x_end, c.passo, c.voltas),
+        None => (
+            bounds.x_start,
+            bounds.x_end,
+            pitch,
+            (bounds.x_end - bounds.x_start).abs() / pitch,
+        ),
     };
     let circunferencia = PI * py_max(current_d, 1e-6);
     let comprimento_helice_por_volta = (circunferencia.powi(2) + pitch.powi(2)).sqrt();
@@ -338,8 +346,8 @@ fn build_layer(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let rotary_radius = py_max(current_d, 1e-6) / 2.0;
 
     let mut layer = vec![format!("(--- CAMADA {} / MULTIPERFIL ---)", layer_num + 1)];
-    if p.fechamento_uniforme {
-        layer.push(fechamento_uniforme_comment(total_rotacoes, pitch));
+    if let Some(c) = &plano {
+        layer.push(fechamento_uniforme_comment(c));
     }
     layer.push(format!("G00 Z{}", f3(z_seguranca)));
     // Começa em 0.0 (um valor, não `None`), exatamente como o Python.
@@ -430,6 +438,9 @@ fn build_layer(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
                 ));
                 tail_start = Pos::xa(x_end, weld_end_a);
                 tail_end = Pos::xa(x_end, final_a_position);
+            } else if plano.is_some() {
+                // Apagamento só em A: o cordão não passa da borda em X.
+                tail_start = Pos::xa(x_end, weld_end_a - rotation_sign);
             }
             append_torch_disable(
                 &mut layer,

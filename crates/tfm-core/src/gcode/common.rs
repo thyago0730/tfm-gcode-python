@@ -6,7 +6,7 @@
 //! `x or padrao` / `max(x, 0.0)` do Python são preservados para que a saída
 //! seja idêntica byte a byte às fixtures golden.
 
-use crate::overlap::{compute_overlap_metrics, OverlapMetrics};
+use crate::overlap::{compute_overlap_metrics, OverlapMetrics, UniformClosing};
 use crate::params::{
     Direction, MultiperfilStrategy, OscillationType, Params, ProfileShape, Rotation, WeldingMode,
 };
@@ -565,12 +565,23 @@ pub fn layer_separator(p: &Params, layer_num: i64) -> String {
 }
 
 /// Comentário gravado na camada quando o fechamento uniforme está ligado:
-/// quantas voltas inteiras e o passo redistribuído.
-pub fn fechamento_uniforme_comment(voltas: f64, passo: f64) -> String {
+/// voltas inteiras, passo redistribuído e o curso do centro do cordão.
+pub fn fechamento_uniforme_comment(plano: &UniformClosing) -> String {
     format!(
-        "(FECHAMENTO UNIFORME: {voltas:.0} voltas, passo {} mm)",
-        f3(passo)
+        "(FECHAMENTO UNIFORME: {:.0} voltas, passo {} mm, centro X{} a X{})",
+        plano.voltas,
+        f3(plano.passo),
+        f3(plano.x_start),
+        f3(plano.x_end)
     )
+}
+
+/// Quanto a peça gira (graus) durante o atraso de apagamento da tocha, num
+/// raio `radius` e à velocidade de trajetória `path_speed_mm_min`: o trecho
+/// em que ainda sai material depois do `M102`.
+pub fn extinguish_arc_deg(p: &Params, path_speed_mm_min: f64, radius: f64) -> f64 {
+    let extra_mm = path_speed_mm_min * (torch_extinguish_delay(p) / 60.0);
+    (extra_mm / py_max(radius, 1e-6)).to_degrees()
 }
 
 #[cfg(test)]
