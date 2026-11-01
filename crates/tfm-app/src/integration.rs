@@ -192,7 +192,7 @@ pub fn with_default_extension(mut path: PathBuf, ext: &str) -> PathBuf {
 }
 
 /// Nome do arquivo (`os.path.basename`), ou o caminho inteiro se não houver.
-fn file_name(path: &Path) -> String {
+pub(crate) fn file_name(path: &Path) -> String {
     path.file_name()
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| path.display().to_string())

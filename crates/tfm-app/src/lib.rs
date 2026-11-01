@@ -7,6 +7,7 @@ pub mod app;
 pub mod charts;
 pub mod compute;
 pub mod dialogs;
+pub mod download;
 pub mod icons;
 pub mod integration;
 pub mod panels;
