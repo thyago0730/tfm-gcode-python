@@ -12,7 +12,7 @@ use tfm_core::config::{json_pretty4, AppConfig, Formulas};
 use tfm_core::formula::{evaluate_block, formula_locals};
 
 use crate::app::{NotifyKind, TfmApp};
-use crate::dialogs::{self, current_params, DialogId};
+use crate::dialogs::{self, DialogId};
 
 /// Id fixo do editor, para ler/gravar o cursor entre quadros.
 const EDITOR_ID: &str = "tfm_formulas_editor";
@@ -128,7 +128,7 @@ impl FormulasState {
     }
 
     pub fn refresh_variables(&mut self, app: &TfmApp) {
-        let params = current_params(app);
+        let params = app.current_params();
         self.variables = formula_locals(&params, &app.cfg.costs)
             .keys()
             .cloned()
@@ -185,7 +185,7 @@ impl FormulasState {
             self.results.clear();
             return;
         };
-        let params = current_params(app);
+        let params = app.current_params();
         let locals = formula_locals(&params, &app.cfg.costs);
         self.variables = locals.keys().cloned().collect();
         let results = evaluate_block(&exprs, &locals);

@@ -119,21 +119,32 @@ pub fn save_config(cfg: &AppConfig, path: &Path) -> Result<(), String> {
         .map_err(|err| format!("{} ({err})", path.display()))
 }
 
+/// Aviso devolvido quando um `config.json` ilegível foi renomeado antes de
+/// gravar os padrões.
+pub const INVALID_CONFIG_WARNING: &str = "config.json inválido; cópia guardada em config.json.bak";
+
 /// Grava **só** as chaves de `ui` que o app controla (tema, larguras, pinos,
 /// painel inferior), editando o JSON existente: ordem das chaves, escapes
 /// `\uXXXX`, demais seções e a convenção de quebra de linha final são
-/// preservados. Sem arquivo ou com JSON inválido, grava o config completo.
-pub fn save_ui_prefs(cfg: &AppConfig, path: &Path) -> Result<(), String> {
+/// preservados. Sem arquivo, grava o config completo. Com um arquivo que não
+/// é um objeto JSON válido, renomeia-o para `config.json.bak`, grava o config
+/// completo e devolve `Ok(Some(aviso))` para o chamador mostrar ao usuário;
+/// nos demais casos devolve `Ok(None)`.
+pub fn save_ui_prefs(cfg: &AppConfig, path: &Path) -> Result<Option<String>, String> {
     let Ok(raw) = std::fs::read(path) else {
-        return save_config(cfg, path);
+        return save_config(cfg, path).map(|()| None);
     };
     let text = String::from_utf8_lossy(&raw);
     let mut root = match serde_json::from_str::<Value>(&text) {
         Ok(root @ Value::Object(_)) => root,
-        _ => return save_config(cfg, path),
+        _ => {
+            let warning = back_up_invalid_config(path);
+            save_config(cfg, path)?;
+            return Ok(Some(warning));
+        }
     };
     let Some(map) = root.as_object_mut() else {
-        return save_config(cfg, path);
+        return save_config(cfg, path).map(|()| None);
     };
     let ui = map.entry("ui").or_insert_with(|| Value::Object(Map::new()));
     if !ui.is_object() {
@@ -160,7 +171,43 @@ pub fn save_ui_prefs(cfg: &AppConfig, path: &Path) -> Result<(), String> {
     if text.ends_with('\n') && !out.ends_with('\n') {
         out.push('\n');
     }
-    std::fs::write(path, out).map_err(|err| format!("{} ({err})", path.display()))
+    std::fs::write(path, out).map_err(|err| format!("{} ({err})", path.display()))?;
+    Ok(None)
+}
+
+/// `<arquivo>.bak` ao lado do original (`config.json` -> `config.json.bak`).
+fn backup_path(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_owned();
+    name.push(".bak");
+    PathBuf::from(name)
+}
+
+/// Renomeia o `config.json` que não é um objeto JSON válido para
+/// `config.json.bak` (substituindo um `.bak` anterior) e devolve o aviso para
+/// o usuário. Se nem renomear der, o aviso diz isso e o arquivo original é
+/// sobrescrito pelos padrões em seguida.
+fn back_up_invalid_config(path: &Path) -> String {
+    let backup = backup_path(path);
+    match std::fs::rename(path, &backup) {
+        Ok(()) => {
+            log::warn!(
+                "{} inválido; cópia guardada em {}",
+                path.display(),
+                backup.display()
+            );
+            INVALID_CONFIG_WARNING.to_string()
+        }
+        Err(err) => {
+            log::warn!(
+                "{} inválido e não foi possível guardar a cópia em {}: {err}",
+                path.display(),
+                backup.display()
+            );
+            format!(
+                "config.json inválido; não foi possível guardar a cópia em config.json.bak ({err})"
+            )
+        }
+    }
 }
 
 const BACKSLASH: char = 92u8 as char;
@@ -273,11 +320,47 @@ mod tests {
     fn save_ui_prefs_cria_o_arquivo_quando_falta() {
         let dir = tempfile::tempdir().expect("tempdir");
         let path = dir.path().join("config").join("config.json");
-        save_ui_prefs(&AppConfig::default(), &path).expect("save");
+        let warning = save_ui_prefs(&AppConfig::default(), &path).expect("save");
+        assert_eq!(warning, None, "arquivo ausente não é inválido");
         let text = std::fs::read_to_string(&path).expect("read");
         let value: Value = serde_json::from_str(&text).expect("json");
         assert_eq!(value["ui"]["left_w"], 360.0);
         assert!(value["costs"].is_object());
+    }
+
+    /// `config.json` que não é um objeto JSON válido vai para
+    /// `config.json.bak` (substituindo um `.bak` anterior) antes de os
+    /// padrões serem gravados, e o chamador recebe o aviso.
+    #[test]
+    fn save_ui_prefs_guarda_copia_do_config_invalido() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("config.json");
+        let bak = dir.path().join("config.json.bak");
+        assert_eq!(backup_path(&path), bak);
+
+        std::fs::write(&path, "{ isto nao e json").expect("write");
+        let warning = save_ui_prefs(&AppConfig::default(), &path).expect("save");
+        assert_eq!(warning.as_deref(), Some(INVALID_CONFIG_WARNING));
+        assert_eq!(
+            std::fs::read_to_string(&bak).expect("bak"),
+            "{ isto nao e json"
+        );
+        let text = std::fs::read_to_string(&path).expect("read");
+        let value: Value = serde_json::from_str(&text).expect("defaults válidos");
+        assert_eq!(value["ui"]["left_w"], 360.0);
+        assert!(value["costs"].is_object());
+
+        // JSON válido que não é objeto também é inválido para o app; o .bak
+        // anterior é substituído.
+        std::fs::write(&path, "[1, 2]").expect("write");
+        let warning = save_ui_prefs(&AppConfig::default(), &path).expect("save");
+        assert_eq!(warning.as_deref(), Some(INVALID_CONFIG_WARNING));
+        assert_eq!(std::fs::read_to_string(&bak).expect("bak"), "[1, 2]");
+
+        // Agora o arquivo é válido: sem aviso e sem mexer no .bak.
+        let warning = save_ui_prefs(&AppConfig::default(), &path).expect("save");
+        assert_eq!(warning, None);
+        assert_eq!(std::fs::read_to_string(&bak).expect("bak"), "[1, 2]");
     }
 }
 

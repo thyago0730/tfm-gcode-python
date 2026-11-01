@@ -21,8 +21,6 @@
 
 use std::collections::HashSet;
 
-use tfm_core::params::Params;
-
 use crate::app::{NotifyKind, TfmApp};
 use crate::prefs;
 
@@ -195,14 +193,6 @@ pub(crate) fn save_config(app: &mut TfmApp) -> bool {
             false
         }
     }
-}
-
-/// Parâmetros do último cálculo (ou os padrões, antes do primeiro).
-pub(crate) fn current_params(app: &TfmApp) -> Params {
-    app.result
-        .as_ref()
-        .map(|r| r.params.clone())
-        .unwrap_or_default()
 }
 
 /// Número para um campo de texto: inteiros saem com `.0` (como o `str(float)`

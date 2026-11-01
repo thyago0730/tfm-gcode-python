@@ -9,7 +9,7 @@ use tfm_core::params::Params;
 use tfm_core::quality::{Limit, Wps};
 
 use crate::app::{NotifyKind, TfmApp};
-use crate::dialogs::{self, current_params, fmt_num, DialogId};
+use crate::dialogs::{self, fmt_num, DialogId};
 use crate::widgets::{parse_num, text_field};
 
 /// Parâmetros críticos que toda EPS lista (os do Python que existem em
@@ -421,7 +421,7 @@ fn create(app: &mut TfmApp, state: &mut WpsState, from_params: bool) {
         return;
     }
     if from_params {
-        let params = params_object(&current_params(app));
+        let params = params_object(&app.current_params());
         let limits = limits_from_params(&params);
         app.quality.add_wps(&name, Some(params));
         if let Some(wps) = app.quality.wps.iter_mut().find(|w| w.name == name) {

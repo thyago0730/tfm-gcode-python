@@ -526,13 +526,14 @@ impl ViewState {
     /// simulação para (o marcador da tocha não pula no meio de um programa
     /// novo) e o enquadramento é pedido se o usuário ainda não ajustou a
     /// câmera — ou de qualquer modo quando a operação muda, porque é outra
-    /// peça (e o ajuste anterior deixa de valer).
+    /// peça (e o ajuste anterior deixa de valer). O primeiro resultado conta
+    /// como mudança de operação: sempre enquadra.
     pub fn note_result(&mut self, key: u64, operation: Operation) -> bool {
         if self.last_key == Some(key) {
             return false;
         }
         self.last_key = Some(key);
-        let op_changed = self.last_operation.is_some_and(|prev| prev != operation);
+        let op_changed = self.last_operation != Some(operation);
         self.last_operation = Some(operation);
         self.sim.stop();
         if op_changed {
@@ -1483,6 +1484,22 @@ mod tests {
             !state.sim.playing && state.sim.progress == 0.0,
             "resultado novo para a simulação"
         );
+    }
+
+    /// O primeiro resultado enquadra mesmo que o usuário já tenha mexido na
+    /// câmera (ainda sem peça): conta como mudança de operação.
+    #[test]
+    fn first_result_always_fits() {
+        let mut state = ViewState {
+            fit_pending: false,
+            ..ViewState::default()
+        };
+        state.cam.zoom(0.5);
+        state.mark_adjusted();
+        assert!(state.user_adjusted && !state.fit_pending);
+        assert!(state.note_result(7, Operation::Espiral));
+        assert!(state.fit_pending, "primeiro resultado sempre enquadra");
+        assert!(!state.user_adjusted, "ajuste sem peça é esquecido");
     }
 
     #[test]

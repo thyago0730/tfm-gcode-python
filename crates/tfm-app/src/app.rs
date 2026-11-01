@@ -141,10 +141,15 @@ impl TfmApp {
         let dirs = prefs::dirs();
         let cfg = AppConfig::read(&dirs.config_path);
         // Como o `ConfigManager.load()` do Python: garante o arquivo e as
-        // chaves de `ui`, sem reescrever o resto do config.
-        if let Err(err) = prefs::save_ui_prefs(&cfg, &dirs.config_path) {
-            log::warn!("Não foi possível gravar o config.json: {err}");
-        }
+        // chaves de `ui`, sem reescrever o resto do config. Um arquivo
+        // ilegível vai para `config.json.bak` e o usuário é avisado.
+        let startup_warning = match prefs::save_ui_prefs(&cfg, &dirs.config_path) {
+            Ok(warning) => warning,
+            Err(err) => {
+                log::warn!("Não foi possível gravar o config.json: {err}");
+                None
+            }
+        };
         let snapshot = UiSnapshot::from_config(&cfg);
         log::info!("Layout inicial: {snapshot:?}");
 
@@ -188,6 +193,9 @@ impl TfmApp {
             NotifyKind::Info,
             format!("Configuração carregada de {}", dirs.config_path.display()),
         );
+        if let Some(warning) = startup_warning {
+            app.notify(NotifyKind::Aviso, warning);
+        }
         app
     }
 
@@ -280,10 +288,15 @@ impl TfmApp {
         let changed = cfg_changed || snapshot != self.last_saved;
         if changed || !self.cfg_path.exists() {
             match prefs::save_ui_prefs(&self.cfg, &self.cfg_path) {
-                Ok(()) => log::info!(
-                    "Preferências salvas em {}: {snapshot:?}",
-                    self.cfg_path.display()
-                ),
+                Ok(warning) => {
+                    log::info!(
+                        "Preferências salvas em {}: {snapshot:?}",
+                        self.cfg_path.display()
+                    );
+                    if let Some(warning) = warning {
+                        self.notify(NotifyKind::Aviso, warning);
+                    }
+                }
                 Err(err) => {
                     log::warn!("Falha ao salvar preferências: {err}");
                     self.notify(
