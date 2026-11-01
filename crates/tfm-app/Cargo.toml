@@ -1,0 +1,34 @@
+[package]
+name = "tfm-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+description = "Interface gráfica (eframe/egui) do TFM G-Code Generator"
+build = "build.rs"
+
+[[bin]]
+name = "TFM_GCODE"
+path = "src/main.rs"
+
+[dependencies]
+tfm-core = { path = "../tfm-core" }
+egui = "0.37"
+eframe = "0.37"
+egui_extras = { version = "0.37", features = ["image"] }
+egui_plot = "0.38"
+rfd = "0.17"
+chrono = { workspace = true }
+image = { version = "0.25", default-features = false, features = ["ico", "png"] }
+log = "0.4"
+env_logger = "0.11"
+open = "5"
+indexmap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
+[dev-dependencies]
+tempfile = { workspace = true }
