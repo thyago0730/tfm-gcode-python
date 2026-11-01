@@ -27,8 +27,8 @@ const GOLDEN_VERSION: &str = "11.3.2";
 /// Linhas da fixture; um `\r` final por linha é descartado (defesa contra
 /// checkouts CRLF). O arquivo termina em `%` sem newline final.
 fn expected_lines() -> Vec<String> {
-    let text = fs::read_to_string(GOLDEN)
-        .unwrap_or_else(|e| panic!("não foi possível ler {GOLDEN}: {e}"));
+    let text =
+        fs::read_to_string(GOLDEN).unwrap_or_else(|e| panic!("não foi possível ler {GOLDEN}: {e}"));
     text.split('\n')
         .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
         .collect()
@@ -38,10 +38,7 @@ fn expected_lines() -> Vec<String> {
 fn first_difference(expected: &[String], got: &[String]) -> Option<String> {
     for (i, (e, o)) in expected.iter().zip(got.iter()).enumerate() {
         if e != o {
-            return Some(format!(
-                "linha {}\n  esperado: {e}\n  obtido:   {o}",
-                i + 1
-            ));
+            return Some(format!("linha {}\n  esperado: {e}\n  obtido:   {o}", i + 1));
         }
     }
     if expected.len() != got.len() {
