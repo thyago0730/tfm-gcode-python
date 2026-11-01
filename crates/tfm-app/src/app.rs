@@ -277,12 +277,10 @@ impl TfmApp {
         }
     }
 
-    /// Parâmetros atuais da interface, com a operação escolhida aplicada.
-    // Tarefa 17 troca por self.ui.to_params(&self.cfg)
+    /// Parâmetros atuais da interface (textos convertidos, operação
+    /// escolhida aplicada e pó resolvido pelo config).
     pub fn current_params(&self) -> Params {
-        let mut p = Params::default();
-        p.apply_operation(self.ui.operation);
-        p
+        self.ui.to_params(&self.cfg)
     }
 
     /// Decide se pede um cálculo neste quadro: na primeira vez, quando a
