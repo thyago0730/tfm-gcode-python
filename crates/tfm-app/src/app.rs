@@ -12,7 +12,7 @@ use tfm_core::params::{Operation, Params};
 use tfm_core::quality::QualityManager;
 
 use crate::compute::{params_key, ComputeHandle, ComputeResult};
-use crate::dialogs::{self, Dialogs};
+use crate::dialogs::{self, DialogId, Dialogs};
 use crate::panels;
 use crate::panels::right::GcodeView;
 use crate::prefs::{self, UiSnapshot};
@@ -163,7 +163,7 @@ impl TfmApp {
             compute,
             result: None,
             notifications: Vec::new(),
-            dialogs: Dialogs,
+            dialogs: Dialogs::default(),
             gcode_view: GcodeView::default(),
             view3d: View3d,
             center_tab: CenterTab::View3d,
@@ -455,18 +455,65 @@ impl TfmApp {
         }
     }
 
-    /// Despacho dos itens de menu. Por enquanto só "Sair" age; as vistas da
-    /// simulação são aceitas sem efeito e o resto fica para as próximas tasks.
+    /// Despacho dos itens de menu. Configurações, Qualidade e Ajuda abrem os
+    /// diálogos (ou agem na hora: instalar macropump, abrir a pasta de logs);
+    /// "Sair" fecha; as vistas da simulação são aceitas sem efeito e o resto
+    /// de Arquivo/G-code/Simulação fica para as próximas tasks.
     fn on_menu(&mut self, ctx: &egui::Context, menu: &str, item: &str) {
         match (menu, item) {
             ("Arquivo", "Sair") => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             ("G-code", "Copiar tudo") => panels::right::copy_gcode(self, ctx),
+            ("Configurações", "Caminho (Mach3)...") => self.dialogs.open(DialogId::Mach3Path),
+            ("Configurações", "Instalar macropump (autoload)") => {
+                dialogs::mach3_path::install_and_notify(self)
+            }
+            ("Configurações", "Custos de Operação...") => self.dialogs.open(DialogId::Costs),
+            ("Configurações", "Tipos de Pó...") => self.dialogs.open(DialogId::Powders),
+            ("Configurações", "Fórmulas...") => self.dialogs.open(DialogId::Formulas),
+            ("Configurações", "Perfis de Máquina...") => {
+                self.dialogs.open(DialogId::MachineProfiles)
+            }
+            ("Qualidade", "Gerenciar Operadores...") => self.dialogs.open(DialogId::Operators),
+            ("Qualidade", "Gerenciar EPS (WPS)...") => self.dialogs.open(DialogId::Wps),
+            ("Qualidade", "Matriz de Riscos (ISO 3834)...") => {
+                self.dialogs.open(DialogId::RiskMatrix)
+            }
+            ("Qualidade", "Manutenção Preventiva...") => {
+                self.dialogs.open(DialogId::Maintenance)
+            }
+            ("Qualidade", "Abrir Pasta de Logs") => self.open_logs_dir(),
+            ("Ajuda", "Tutorial") => self.dialogs.open(DialogId::Tutorial),
+            ("Ajuda", "Atalhos") => self.dialogs.open(DialogId::Shortcuts),
+            ("Ajuda", "Sobre") => self.dialogs.open(DialogId::About),
             (
                 "Simulação",
                 "Vista Isométrica" | "Vista Superior" | "Vista Lateral" | "Vista Frontal"
                 | "Vista Traseira",
             ) => {}
             _ => log::debug!("Menu {menu} > {item}: ação ainda não implementada"),
+        }
+    }
+
+    /// "Abrir Pasta de Logs": garante `data/logs` na raiz do app e abre no
+    /// gerenciador de arquivos.
+    fn open_logs_dir(&mut self) {
+        let dir = prefs::app_root().join("data").join("logs");
+        if let Err(err) = std::fs::create_dir_all(&dir) {
+            self.notify(
+                NotifyKind::Erro,
+                format!("Não foi possível criar {}: {err}", dir.display()),
+            );
+            return;
+        }
+        match open::that(&dir) {
+            Ok(()) => self.notify(
+                NotifyKind::Info,
+                format!("Pasta de logs: {}", dir.display()),
+            ),
+            Err(err) => self.notify(
+                NotifyKind::Erro,
+                format!("Não foi possível abrir {}: {err}", dir.display()),
+            ),
         }
     }
 
