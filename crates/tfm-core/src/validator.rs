@@ -243,6 +243,65 @@ pub fn py_float(v: f64) -> String {
 
 const EMPTY_MSG: &str = "G-code vazio";
 const MISSING_ENABLE_MSG: &str = "Movimento de solda antes de ligar a tocha (M101)";
+const REVERSED_A_PREFIX: &str = "Rotação A invertida: ";
+
+/// Nomes dos três itens da checklist de [`gcode_checklist`], na ordem em que
+/// ela os devolve.
+pub const CHECKLIST_NAMES: [&str; 3] = [
+    "Programa com linhas de G-code",
+    "Tocha ligada (M101) antes do primeiro movimento de solda",
+    "Eixo A sempre no sentido de rotação escolhido",
+];
+
+/// Um item da checklist de invariantes: o nome do que foi conferido e as
+/// mensagens de falha (vazio = OK).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChecklistItem {
+    pub name: &'static str,
+    pub failures: Vec<String>,
+}
+
+impl ChecklistItem {
+    /// O item passou (nenhuma falha).
+    pub fn is_ok(&self) -> bool {
+        self.failures.is_empty()
+    }
+}
+
+/// Os mesmos invariantes de [`gcode_invariants`], agrupados nos três itens
+/// de [`CHECKLIST_NAMES`] para mostrar como checklist (OK ou a mensagem de
+/// falha). Achatar as falhas na ordem dos itens dá as mesmas mensagens de
+/// `gcode_invariants`, que percorre o programa uma vez e produz no máximo
+/// uma falha do item 1, ou falhas do item 2 (todas antes do primeiro `M101`)
+/// seguidas das do item 3.
+pub fn gcode_checklist(lines: &[String], p: &Params) -> Vec<ChecklistItem> {
+    let mut items: Vec<ChecklistItem> = CHECKLIST_NAMES
+        .iter()
+        .map(|name| ChecklistItem {
+            name,
+            failures: Vec::new(),
+        })
+        .collect();
+    for message in gcode_invariants(lines, p) {
+        let index = if message == EMPTY_MSG {
+            0
+        } else if message == MISSING_ENABLE_MSG {
+            1
+        } else if message.starts_with(REVERSED_A_PREFIX) {
+            2
+        } else {
+            debug_assert!(false, "invariante sem item na checklist: {message}");
+            continue;
+        };
+        items[index].failures.push(message);
+    }
+    items
+}
+
+/// Todos os itens da checklist passaram.
+pub fn checklist_passed(items: &[ChecklistItem]) -> bool {
+    items.iter().all(ChecklistItem::is_ok)
+}
 
 /// Porta de `validate_gcode_invariants`: confere o programa gerado contra os
 /// invariantes de processo. Devolve as mensagens (vazio = tudo certo):
@@ -305,7 +364,7 @@ pub fn gcode_invariants(lines: &[String], p: &Params) -> Vec<String> {
                 a_violations += 1;
                 if a_violations <= 3 {
                     issues.push(format!(
-                        "Rotação A invertida: {prev_a:.3} -> {a_val:.3} ({prev_line} -> {line})"
+                        "{REVERSED_A_PREFIX}{prev_a:.3} -> {a_val:.3} ({prev_line} -> {line})"
                     ));
                 }
             }
@@ -519,6 +578,43 @@ mod tests {
         assert!(gcode_invariants(&lines(&["G00 X1", "G010 X1", "XG1 X1", "G1X"]), &p).is_empty());
         assert_eq!(gcode_invariants(&lines(&["G1"]), &p), vec![msg.clone()]);
         assert_eq!(gcode_invariants(&lines(&["X5 G01"]), &p), vec![msg]);
+    }
+
+    /// A checklist estruturada tem três itens fixos, na ordem de
+    /// [`CHECKLIST_NAMES`]; num programa golden todos passam, e as falhas
+    /// achatadas são exatamente as mensagens de `gcode_invariants`.
+    #[test]
+    fn checklist_groups_invariants_by_item() {
+        let (p, golden) = golden_case("espiral_padrao");
+        let items = gcode_checklist(&golden, &p);
+        assert_eq!(items.len(), 3);
+        let names: Vec<&str> = items.iter().map(|i| i.name).collect();
+        assert_eq!(names, CHECKLIST_NAMES);
+        assert!(items.iter().all(ChecklistItem::is_ok));
+        assert!(checklist_passed(&items));
+
+        // G1 antes do M101 e, com a tocha ligada, o eixo A recuando (horário).
+        let bad = lines(&["G1 X1", "M101", "G1 A10", "G1 A5", "M102"]);
+        let items = gcode_checklist(&bad, &p);
+        assert!(items[0].is_ok(), "programa não está vazio");
+        assert_eq!(
+            items[1].failures,
+            vec!["Movimento de solda antes de ligar a tocha (M101)".to_string()]
+        );
+        assert_eq!(items[2].failures.len(), 1);
+        assert!(
+            items[2].failures[0].starts_with("Rotação A invertida: 10.000 -> 5.000"),
+            "{}",
+            items[2].failures[0]
+        );
+        assert!(!checklist_passed(&items));
+        let flat: Vec<String> = items.iter().flat_map(|i| i.failures.clone()).collect();
+        assert_eq!(flat, gcode_invariants(&bad, &p));
+
+        let items = gcode_checklist(&[], &p);
+        assert_eq!(items[0].failures, vec!["G-code vazio".to_string()]);
+        assert!(items[1].is_ok() && items[2].is_ok());
+        assert!(!checklist_passed(&items));
     }
 
     #[test]
