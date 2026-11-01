@@ -166,6 +166,18 @@ fn every_cylindrical_operation_has_a_map_and_the_others_do_not() {
     }
 }
 
+/// O apagamento da quadrada sem a caixa anda 100 mm em X: o material existe,
+/// mas os números medem a peça, não o caminho até X150.
+#[test]
+fn report_measures_the_part_and_not_the_run_out_past_it() {
+    let mut p = Params::default();
+    p.apply_operation(Operation::OscilacaoQuadrada);
+    let m = model(&p);
+    assert!(m.map.x_at(m.map.nx - 1) > 140.0, "o mapa deveria chegar lá");
+    assert!(m.report.uncovered_pct < 5.0, "{:?}", m.report);
+    assert!((m.report.mean_mm - 1.5).abs() < 0.3, "{:?}", m.report);
+}
+
 #[test]
 fn compensation_flattens_the_ends_and_saves_material_and_time() {
     let base = model(&closing()).report;

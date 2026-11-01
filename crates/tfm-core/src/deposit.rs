@@ -16,7 +16,7 @@
 
 use std::f32::consts::TAU;
 
-use crate::gcode::common::overlap_metrics;
+use crate::gcode::common::{overlap_metrics, rotary_arc_bounds};
 use crate::params::{Params, WeldingMode};
 use crate::toolpath::{PathPoint, Toolpath};
 
@@ -300,7 +300,13 @@ pub fn simulate(tp: &Toolpath, p: &Params, q: f64) -> Option<DepositModel> {
     for s in &stamps {
         map.stamp(s);
     }
-    let report = report(&map, lo, hi, weld_min);
+    // Os números medem a peça: o percurso pode passar dela no apagamento.
+    let bounds = rotary_arc_bounds(p);
+    let (piece_lo, piece_hi) = (
+        bounds.x_start.min(bounds.x_end) as f32,
+        bounds.x_start.max(bounds.x_end) as f32,
+    );
+    let report = report(&map, lo.max(piece_lo), hi.min(piece_hi), weld_min);
     Some(DepositModel {
         map,
         stamps,
