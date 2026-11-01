@@ -284,8 +284,12 @@ pub struct Params {
     /// Velocidade de deposição (mm/min). Presets antigos: `velocidade_soldagem`.
     #[serde(alias = "velocidade_soldagem", deserialize_with = "lenient_f64")]
     pub velocidade_de_deposicao: f64,
-    /// Espelho de `velocidade_de_deposicao`; `None` até [`Params::normalize`].
-    #[serde(deserialize_with = "lenient_opt_f64")]
+    /// Espelho de `velocidade_de_deposicao`; `None` até [`Params::normalize`]
+    /// (e então ausente do JSON, como a chave ausente no Python).
+    #[serde(
+        deserialize_with = "lenient_opt_f64",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub taxa_de_deposicao: Option<f64>,
     #[serde(deserialize_with = "lenient_f64")]
     pub velocidade_a_mm_min: f64,
@@ -425,7 +429,9 @@ pub struct Params {
     pub ordem_servico: String,
     #[serde(deserialize_with = "lenient_string")]
     pub powder_name: String,
-    /// Versão do app que gravou o JSON (`"11.3.2"` nas fixtures golden).
+    /// Versão do app que gravou o JSON (`"11.3.2"` nas fixtures golden);
+    /// ausente do JSON quando `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub app_version: Option<String>,
 }
 

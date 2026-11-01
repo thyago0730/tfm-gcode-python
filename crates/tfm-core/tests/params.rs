@@ -553,8 +553,22 @@ fn serializes_with_python_json_keys_and_enum_strings() {
     assert_eq!(obj["diametro"], json!(50.0));
     assert_eq!(obj["num_camadas"], json!(1));
     assert_eq!(obj["torch_retract_on_ignite"], json!(true));
-    assert_eq!(obj["taxa_de_deposicao"], Value::Null);
-    assert_eq!(obj["app_version"], Value::Null);
+    // `None` não é escrito (nem como `null`): o JSON fica como o do Python
+    // antes de `_normalize_params`, sem as chaves.
+    assert!(
+        !obj.contains_key("taxa_de_deposicao"),
+        "taxa_de_deposicao ausente quando None"
+    );
+    assert!(
+        !obj.contains_key("app_version"),
+        "app_version ausente quando None"
+    );
+    let mut with = Params::default();
+    with.taxa_de_deposicao = Some(120.0);
+    with.app_version = Some("11.3.2".to_string());
+    let v = serde_json::to_value(&with).expect("serialize");
+    assert_eq!(v["taxa_de_deposicao"], json!(120.0));
+    assert_eq!(v["app_version"], json!("11.3.2"));
     assert!(obj.contains_key("velocidade_de_deposicao"));
     assert!(
         !obj.contains_key("velocidade_soldagem"),

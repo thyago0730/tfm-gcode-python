@@ -176,7 +176,7 @@ pub fn validate_physical(p: &Params) -> FieldErrors {
         if perc <= 0.0 || perc > 100.0 {
             fe.fail(
                 format!(
-                    "Deslocamento angular ({}%) inválido. Deve estar entre 0 e 100%.",
+                    "Deslocamento angular ({}%) inválido. Deve ser maior que 0 e no máximo 100%.",
                     py_float(perc)
                 ),
                 &["deslocamento_angular_perc"],
@@ -695,7 +695,8 @@ mod tests {
             vec![
                 "Comprimento de oscilação (60.0mm) maior que o diâmetro da peça (50.0mm)."
                     .to_string(),
-                "Deslocamento angular (0.0%) inválido. Deve estar entre 0 e 100%.".to_string(),
+                "Deslocamento angular (0.0%) inválido. Deve ser maior que 0 e no máximo 100%."
+                    .to_string(),
             ]
         );
         assert_eq!(
@@ -718,7 +719,21 @@ mod tests {
         p.oscilacao_comprimento = 5.0;
         assert_eq!(
             validate_physical(&p).errors,
-            vec!["Deslocamento angular (100.5%) inválido. Deve estar entre 0 e 100%.".to_string()]
+            vec![
+                "Deslocamento angular (100.5%) inválido. Deve ser maior que 0 e no máximo 100%."
+                    .to_string()
+            ]
+        );
+        // Os extremos: 100% é aceito, 0% e negativo não.
+        p.deslocamento_angular_perc = 100.0;
+        assert!(validate_physical(&p).errors.is_empty(), "100% é válido");
+        p.deslocamento_angular_perc = -5.0;
+        assert_eq!(
+            validate_physical(&p).errors,
+            vec![
+                "Deslocamento angular (-5.0%) inválido. Deve ser maior que 0 e no máximo 100%."
+                    .to_string()
+            ]
         );
 
         // Diâmetro zero em oscilação: a mesma chave aparece uma vez só.
