@@ -347,6 +347,11 @@ pub struct Params {
     // --- Espiral / chapa / interno -----------------------------------------
     #[serde(deserialize_with = "lenient_bool")]
     pub spiral_close_ends: bool,
+    /// Fechamento uniforme da espiral: arredonda as voltas para um número
+    /// inteiro e redistribui o passo, para a última passada terminar em
+    /// volta cheia (ver `overlap::uniform_closing`). Não existia no Python.
+    #[serde(deserialize_with = "lenient_bool")]
+    pub fechamento_uniforme: bool,
     #[serde(deserialize_with = "lenient_bool")]
     pub flat_single_direction: bool,
     pub flat_orientation: FlatOrientation,
@@ -474,6 +479,7 @@ impl Default for Params {
             powder_cost_brl_kg: 450.0,
             torch_retract_on_ignite: true,
             spiral_close_ends: false,
+            fechamento_uniforme: false,
             flat_single_direction: false,
             flat_orientation: FlatOrientation::X,
             operacao_interna: false,
@@ -598,6 +604,7 @@ impl Params {
                 self.multiperfil_profile_height_mm = d.multiperfil_profile_height_mm;
                 self.multiperfil_end_chamfer_enabled = d.multiperfil_end_chamfer_enabled;
                 self.multiperfil_end_chamfer_angle_deg = d.multiperfil_end_chamfer_angle_deg;
+                self.fechamento_uniforme = d.fechamento_uniforme;
             }
             Operation::Espiral
             | Operation::OscilacaoLinear
@@ -606,6 +613,7 @@ impl Params {
                 self.lead_extras_enabled = d.lead_extras_enabled;
                 self.operacao_interna = d.operacao_interna;
                 self.spiral_close_ends = d.spiral_close_ends;
+                self.fechamento_uniforme = d.fechamento_uniforme;
             }
         }
         self.bead_width_calibration_factor = d.bead_width_calibration_factor;

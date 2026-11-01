@@ -8,10 +8,11 @@ use std::f64::consts::PI;
 
 use super::common::{
     append_torch_disable, append_torch_enable, build_footer, build_header, direction_str,
-    effective_base_diameter, f1, f3, layer_separator, overlap_metrics, py_max, rotary_arc_bounds,
-    Pos,
+    effective_base_diameter, f1, f3, fechamento_uniforme_comment, layer_separator, overlap_metrics,
+    py_max, rotary_arc_bounds, Pos,
 };
 use super::GenError;
+use crate::overlap::uniform_closing;
 use crate::params::Params;
 
 /// `_generate_spiral`: cabeçalho + uma hélice por camada + rodapé.
@@ -51,7 +52,13 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let comprimento_total_arc = (x_arc_end_calc - x_arc_start_calc).abs();
     let metrics = overlap_metrics(p, layer_num, Some(current_d), None);
     let passo = metrics.step_over_mm;
-    let total_rotacoes = comprimento_total_arc / passo;
+    // Fechamento uniforme: voltas inteiras e passo redistribuído, para a
+    // passada terminar em volta cheia; desligado, é o cálculo do Python.
+    let (passo, total_rotacoes) = if p.fechamento_uniforme {
+        uniform_closing(comprimento_total_arc, passo)
+    } else {
+        (passo, comprimento_total_arc / passo)
+    };
     let rotation_sign = p.rotation_sign();
     let angulo_total_a = total_rotacoes * 360.0 * rotation_sign;
     // Comprimento real da hélice por volta, para manter a velocidade de
@@ -68,8 +75,11 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let mut seg = vec![
         format!("(--- CAMADA {} ---)", layer_num + 1),
         format!("(SENTIDO: {direction})"),
-        format!("G00 Z{}", f3(z_seguranca)),
     ];
+    if p.fechamento_uniforme {
+        seg.push(fechamento_uniforme_comment(total_rotacoes, passo));
+    }
+    seg.push(format!("G00 Z{}", f3(z_seguranca)));
     seg.push(format!("G00 X{} A0", f3(x_arc_start_calc)));
     seg.push(format!("G00 Z{}", f3(z_layer)));
     if layer_num == 0 {

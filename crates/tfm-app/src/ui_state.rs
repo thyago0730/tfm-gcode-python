@@ -238,6 +238,7 @@ const FLAG_FIELDS: &[FlagField] = &[
     flag!("lead_extras_enabled", lead_extras_enabled),
     flag!("torch_retract_on_ignite", torch_retract_on_ignite),
     flag!("spiral_close_ends", spiral_close_ends),
+    flag!("fechamento_uniforme", fechamento_uniforme),
     flag!("flat_single_direction", flat_single_direction),
     flag!("operacao_interna", operacao_interna),
     flag!("multiperfil_point_by_point", multiperfil_point_by_point),
@@ -262,6 +263,7 @@ const PRESET_KEYS: &[&str] = &[
     "flat_single_direction",
     "torch_retract_on_ignite",
     "spiral_close_ends",
+    "fechamento_uniforme",
     "lead_extras_enabled",
     "operacao_interna",
     "internal_face_clearance_x",
@@ -296,6 +298,7 @@ const MULTIPERFIL_KEYS: &[&str] = &[
     "multiperfil_profile_height_mm",
     "multiperfil_end_chamfer_enabled",
     "multiperfil_end_chamfer_angle_deg",
+    "fechamento_uniforme",
 ];
 
 /// Chaves que a primeira entrada numa operação sem preset leva ao padrão
@@ -336,6 +339,7 @@ fn reset_keys(op: Operation) -> &'static [&'static str] {
             "lead_extras_enabled",
             "operacao_interna",
             "spiral_close_ends",
+            "fechamento_uniforme",
         ],
     }
 }
@@ -843,6 +847,24 @@ mod tests {
         let p = s.to_params(&cfg);
         assert_eq!(p.welding_mode, WeldingMode::EspiralMultiperfil);
         assert_eq!(p.num_camadas, 3);
+    }
+
+    /// A caixa "Fechamento uniforme" vai e volta entre a UI e os parâmetros
+    /// e é um campo do modo (o "Padrão" a desliga).
+    #[test]
+    fn fechamento_uniforme_flag_round_trips() {
+        let cfg = cfg();
+        let mut s = UiState::default();
+        assert!(!s.to_params(&cfg).fechamento_uniforme, "padrão é desligado");
+        s.flags.insert("fechamento_uniforme", true);
+        assert!(s.to_params(&cfg).fechamento_uniforme);
+        let p = Params {
+            fechamento_uniforme: true,
+            ..Params::default()
+        };
+        assert!(UiState::from_params(&p).flags["fechamento_uniforme"]);
+        s.reset_defaults();
+        assert!(!s.flags["fechamento_uniforme"]);
     }
 
     /// "Padrão" restaura só os campos do modo (e a calibração).

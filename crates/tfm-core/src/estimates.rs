@@ -551,6 +551,13 @@ fn espiral(p: &Params, s: &Shared) -> ModeOutcome {
     let passo = steps.iter().sum::<f64>() / (steps.len().max(1) as f64);
     let passo = py_max(passo, 1e-6);
     let total_rotacoes_part = if s.h > 0.0 { s.h / passo } else { 0.0 };
+    // Fechamento uniforme: as voltas viram inteiras e o passo encolhe, como
+    // no G-code gerado.
+    let (passo, total_rotacoes_part) = if p.fechamento_uniforme && s.h > 0.0 {
+        crate::overlap::uniform_closing(s.h, passo)
+    } else {
+        (passo, total_rotacoes_part)
+    };
     let angulo_part = total_rotacoes_part * 360.0 + 720.0;
     let comprimento_helice_por_volta = (s.circunferencia.powi(2) + passo.powi(2)).sqrt();
     let comprimento_total_helice = total_rotacoes_part * comprimento_helice_por_volta;
@@ -568,7 +575,11 @@ fn espiral(p: &Params, s: &Shared) -> ModeOutcome {
             over_limit: s.rpm_over_limit(rpm_check),
         },
         pitch: ResultText {
-            text: format!("{} (axial)", txt3(passo)),
+            text: if p.fechamento_uniforme {
+                format!("{} (axial, volta inteira)", txt3(passo))
+            } else {
+                format!("{} (axial)", txt3(passo))
+            },
             over_limit: s.x_travel_over_limit(),
         },
         rotations: txt2(total_rotacoes_part),

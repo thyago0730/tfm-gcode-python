@@ -276,3 +276,22 @@ pub fn compute_overlap_metrics(
         uniformity,
     }
 }
+
+/// Fechamento uniforme da espiral: arredonda as voltas para cima até um
+/// número inteiro e redistribui o passo no comprimento, de modo que a espiral
+/// termine em volta cheia (sem o "ângulo aberto" da última passada). O passo
+/// nunca cresce, então a sobreposição só aumenta. Devolve `(passo, voltas)`;
+/// entradas não positivas ou não finitas voltam como vieram, com as voltas
+/// que elas dariam (0 quando o passo é inválido).
+pub fn uniform_closing(comprimento: f64, passo: f64) -> (f64, f64) {
+    if !(comprimento > 0.0 && passo > 0.0) || !comprimento.is_finite() || !passo.is_finite() {
+        let voltas = if passo > 0.0 && comprimento.is_finite() && comprimento > 0.0 {
+            comprimento / passo
+        } else {
+            0.0
+        };
+        return (passo, voltas);
+    }
+    let voltas = (comprimento / passo - 1e-9).ceil().max(1.0);
+    (comprimento / voltas, voltas)
+}
