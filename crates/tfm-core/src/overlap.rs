@@ -284,7 +284,7 @@ pub fn compute_overlap_metrics(
 /// entradas não positivas ou não finitas voltam como vieram, com as voltas
 /// que elas dariam (0 quando o passo é inválido).
 pub fn uniform_closing(comprimento: f64, passo: f64) -> (f64, f64) {
-    if !(comprimento > 0.0 && passo > 0.0) || !comprimento.is_finite() || !passo.is_finite() {
+    if !(comprimento > 0.0 && passo > 0.0 && comprimento.is_finite() && passo.is_finite()) {
         let voltas = if passo > 0.0 && comprimento.is_finite() && comprimento > 0.0 {
             comprimento / passo
         } else {

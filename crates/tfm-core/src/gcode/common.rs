@@ -564,6 +564,15 @@ pub fn layer_separator(p: &Params, layer_num: i64) -> String {
     }
 }
 
+/// Comentário gravado na camada quando o fechamento uniforme está ligado:
+/// quantas voltas inteiras e o passo redistribuído.
+pub fn fechamento_uniforme_comment(voltas: f64, passo: f64) -> String {
+    format!(
+        "(FECHAMENTO UNIFORME: {voltas:.0} voltas, passo {} mm)",
+        f3(passo)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     //! Cobre os auxiliares que o modo Espiral não exercita (outros modos os
@@ -721,13 +730,4 @@ mod tests {
         assert_eq!(layer_separator(&p, 1), "M01");
         assert_eq!(layer_separator(&p, 2), "");
     }
-}
-
-/// Comentário gravado na camada quando o fechamento uniforme está ligado:
-/// quantas voltas inteiras e o passo redistribuído.
-pub fn fechamento_uniforme_comment(voltas: f64, passo: f64) -> String {
-    format!(
-        "(FECHAMENTO UNIFORME: {voltas:.0} voltas, passo {} mm)",
-        f3(passo)
-    )
 }
