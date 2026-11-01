@@ -3,6 +3,12 @@
 //! Paleta clara e escura próprias (estilo Prancheta CNC, não o cinza padrão
 //! do egui), preferência Automático/Claro/Escuro e carga opcional da fonte
 //! Inter a partir de `assets/fonts/`.
+//!
+//! Cores semânticas: o tema claro usa exatamente as do design (accent `#2563eb`,
+//! sucesso `#16a34a`, atenção `#ca8a04`, erro `#dc2626`); o tema escuro usa os
+//! tons mais claros da mesma família (`#3b82f6`, `#22c55e`, `#eab308`, `#ef4444`)
+//! por contraste sobre o fundo `#15181d`. As nove cores de camada são as mesmas
+//! nos dois temas.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -97,6 +103,9 @@ pub struct Palette {
 }
 
 impl Palette {
+    /// Tema claro: exatamente as quatro cores do design (accent `#2563eb`,
+    /// sucesso `#16a34a`, atenção `#ca8a04`, erro `#dc2626`); fundo `#f6f7f9`,
+    /// cartões `#ffffff`, texto `#1f2937`.
     pub fn light() -> Palette {
         Palette {
             accent: hex(0x2563eb),
@@ -113,6 +122,12 @@ impl Palette {
         }
     }
 
+    /// Tema escuro. Usa os tons **mais claros** (500) da mesma família das
+    /// cores do design, por contraste sobre o fundo `#15181d`: accent `#3b82f6`
+    /// (claro: `#2563eb`), sucesso `#22c55e` (`#16a34a`), atenção `#eab308`
+    /// (`#ca8a04`), erro `#ef4444` (`#dc2626`). Desvio aceito pelo controlador na
+    /// revisão da Task 15. Fundo `#15181d`, cartões `#1e2229`, texto `#e5e7eb`;
+    /// as nove cores de camada são as mesmas do tema claro.
     pub fn dark() -> Palette {
         Palette {
             accent: hex(0x3b82f6),
@@ -400,13 +415,46 @@ mod tests {
     #[test]
     fn cores_fixas_do_design() {
         assert_eq!(hex(0x2563eb), Color32::from_rgb(0x25, 0x63, 0xeb));
+        // Tema claro: exatamente as cores do design (tons 600).
         let p = Palette::light();
         assert_eq!(p.accent, hex(0x2563eb));
         assert_eq!(p.success, hex(0x16a34a));
         assert_eq!(p.warning, hex(0xca8a04));
         assert_eq!(p.danger, hex(0xdc2626));
-        assert_eq!(p.layer_color(9), p.layer_colors[0]);
-        assert!(!light_visuals().dark_mode);
-        assert!(dark_visuals().dark_mode);
+        assert!(!p.dark);
+        let v = light_visuals();
+        assert!(!v.dark_mode);
+        assert_eq!(v.selection.bg_fill, p.accent);
+        assert_eq!(v.hyperlink_color, p.accent);
+    }
+
+    #[test]
+    fn cores_fixas_do_tema_escuro() {
+        // Tema escuro: os tons 500 (mais claros) da mesma família, por contraste
+        // sobre #15181d. Decisão registrada; não deve mudar sem querer.
+        let p = Palette::dark();
+        assert_eq!(p.accent, hex(0x3b82f6));
+        assert_eq!(p.success, hex(0x22c55e));
+        assert_eq!(p.warning, hex(0xeab308));
+        assert_eq!(p.danger, hex(0xef4444));
+        assert!(p.dark);
+        let v = dark_visuals();
+        assert!(v.dark_mode);
+        assert_eq!(v.selection.bg_fill, p.accent);
+        assert_eq!(v.hyperlink_color, p.accent);
+        assert_eq!(v.warn_fg_color, p.warning);
+        assert_eq!(v.error_fg_color, p.danger);
+    }
+
+    #[test]
+    fn camadas_sao_as_nove_do_design_nos_dois_temas() {
+        let expected = [
+            0x2563eb, 0xdc2626, 0x16a34a, 0x9333ea, 0xea580c, 0x0891b2, 0xbe185d, 0x65a30d,
+            0x854d0e,
+        ]
+        .map(hex);
+        assert_eq!(Palette::light().layer_colors, expected);
+        assert_eq!(Palette::dark().layer_colors, expected);
+        assert_eq!(Palette::light().layer_color(9), expected[0]);
     }
 }
