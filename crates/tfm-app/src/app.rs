@@ -8,9 +8,10 @@ use std::time::{Duration, Instant};
 use egui::{Align, Color32, Layout, RichText};
 use tfm_core::audit::AuditLogger;
 use tfm_core::config::AppConfig;
+use tfm_core::params::{Operation, Params};
 use tfm_core::quality::QualityManager;
 
-use crate::compute::{ComputeHandle, ComputeResult};
+use crate::compute::{params_key, ComputeHandle, ComputeResult};
 use crate::dialogs::{self, Dialogs};
 use crate::panels;
 use crate::panels::right::GcodeView;
@@ -23,6 +24,8 @@ use crate::view3d::{self, View3d};
 pub const MAX_NOTIFICATIONS: usize = 200;
 /// Espera após a última mudança de layout antes de gravar o config.
 const PREFS_SAVE_DELAY: Duration = Duration::from_millis(1200);
+/// Espera após a última mudança de parâmetros antes de recalcular o G-code.
+const COMPUTE_DEBOUNCE: Duration = Duration::from_millis(300);
 /// Largura da faixa que fica na borda quando um painel está recolhido.
 const EDGE_W: f32 = 22.0;
 
@@ -118,6 +121,14 @@ pub struct TfmApp {
     pub right_w: f32,
     last_saved: UiSnapshot,
     dirty_since: Option<Instant>,
+    /// Chave (parâmetros + config) vista no último quadro.
+    last_key: Option<u64>,
+    /// Momento da última mudança de chave (base do debounce do cálculo).
+    last_change: Instant,
+    /// Operação vista no último quadro (mudar de operação recalcula na hora).
+    last_operation: Operation,
+    /// Chave do último resultado cujos invariantes já viraram aviso.
+    last_warned_key: Option<u64>,
 }
 
 impl TfmApp {
@@ -138,20 +149,22 @@ impl TfmApp {
         let quality = QualityManager::load(&dirs.config_dir, &dirs.quality_dir);
         let audit = AuditLogger::new(dirs.logs_dir.clone());
         let compute = ComputeHandle::new(cc.egui_ctx.clone());
+        let ui_state = UiState::default();
+        let last_operation = ui_state.operation;
 
         let mut app = TfmApp {
             cfg,
             cfg_path: dirs.config_path.clone(),
             theme: snapshot.theme,
             palette,
-            ui: UiState::default(),
+            ui: ui_state,
             quality,
             audit,
             compute,
             result: None,
             notifications: Vec::new(),
             dialogs: Dialogs,
-            gcode_view: GcodeView,
+            gcode_view: GcodeView::default(),
             view3d: View3d,
             center_tab: CenterTab::View3d,
             left_open: snapshot.left_pinned,
@@ -160,6 +173,10 @@ impl TfmApp {
             right_w: snapshot.right_w,
             last_saved: snapshot,
             dirty_since: None,
+            last_key: None,
+            last_change: Instant::now(),
+            last_operation,
+            last_warned_key: None,
         };
         app.notify(
             NotifyKind::Info,
@@ -258,6 +275,73 @@ impl TfmApp {
         if dark != self.palette.dark {
             self.palette = Palette::for_dark(dark);
         }
+    }
+
+    /// Parâmetros atuais da interface, com a operação escolhida aplicada.
+    // Tarefa 17 troca por self.ui.to_params(&self.cfg)
+    pub fn current_params(&self) -> Params {
+        let mut p = Params::default();
+        p.apply_operation(self.ui.operation);
+        p
+    }
+
+    /// Decide se pede um cálculo neste quadro: na primeira vez, quando a
+    /// operação muda (na hora) ou quando parâmetros/config mudaram e já
+    /// passou [`COMPUTE_DEBOUNCE`] desde a última mudança. Nunca repete um
+    /// pedido com a mesma chave do último feito.
+    fn drive_compute(&mut self, ctx: &egui::Context) {
+        let params = self.current_params();
+        let key = params_key(&params, &self.cfg);
+        let now = Instant::now();
+        if self.last_key != Some(key) {
+            self.last_key = Some(key);
+            self.last_change = now;
+            self.ui.dirty = true;
+        }
+        let op_changed = self.ui.operation != self.last_operation;
+        self.last_operation = self.ui.operation;
+
+        let already_requested = self.compute.last_requested() == Some(key);
+        let first = self.result.is_none() && !already_requested;
+        let since_change = now.duration_since(self.last_change);
+        let settled = self.ui.dirty && since_change >= COMPUTE_DEBOUNCE;
+        if first || op_changed || settled {
+            if !already_requested {
+                log::debug!(
+                    "Pedido de cálculo {key:#018x} ({})",
+                    self.ui.operation.label()
+                );
+                self.compute.request(params, self.cfg.clone(), key);
+            }
+            self.ui.dirty = false;
+        } else if self.ui.dirty {
+            ctx.request_repaint_after(COMPUTE_DEBOUNCE.saturating_sub(since_change));
+        }
+    }
+
+    /// Recolhe o resultado mais novo do trabalhador; invariantes violados
+    /// viram um aviso, uma vez por chave.
+    fn receive_result(&mut self) {
+        let Some(result) = self.compute.poll() else {
+            return;
+        };
+        log::info!(
+            "Resultado {:#018x}: {} linhas, {} aviso(s) de invariantes, erro: {}",
+            result.key,
+            result.lines.len(),
+            result.invariants.len(),
+            result.gen_error.as_deref().unwrap_or("nenhum")
+        );
+        if !result.invariants.is_empty() && self.last_warned_key != Some(result.key) {
+            self.last_warned_key = Some(result.key);
+            let text = format!(
+                "G-code gerado com {} aviso(s): {}",
+                result.invariants.len(),
+                result.invariants.join(" | ")
+            );
+            self.notify(NotifyKind::Aviso, text);
+        }
+        self.result = Some(result);
     }
 }
 
@@ -378,6 +462,7 @@ impl TfmApp {
     fn on_menu(&mut self, ctx: &egui::Context, menu: &str, item: &str) {
         match (menu, item) {
             ("Arquivo", "Sair") => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            ("G-code", "Copiar tudo") => panels::right::copy_gcode(self, ctx),
             (
                 "Simulação",
                 "Vista Isométrica" | "Vista Superior" | "Vista Lateral" | "Vista Frontal"
@@ -647,9 +732,8 @@ impl eframe::App for TfmApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.refresh_palette(&ctx);
-        if let Some(result) = self.compute.poll() {
-            self.result = Some(result);
-        }
+        self.receive_result();
+        self.drive_compute(&ctx);
 
         self.top_bar(ui);
         self.left_panel(ui);
