@@ -13,6 +13,7 @@ use tfm_core::quality::QualityManager;
 
 use crate::compute::{params_key, ComputeHandle, ComputeResult};
 use crate::dialogs::{self, DialogId, Dialogs};
+use crate::download;
 use crate::integration::{self, IntegrationState};
 use crate::panels;
 use crate::panels::right::GcodeView;
@@ -463,6 +464,7 @@ const MENUS: &[(&str, &[Entry])] = &[
     (
         "G-code",
         &[
+            Item("Gerar G-code"),
             Item("Baixar G-code"),
             Item("Abrir no Mach3"),
             Sep,
@@ -521,7 +523,8 @@ impl TfmApp {
             ("Arquivo", "Carregar Procedimento...") => integration::load_procedure_dialog(self),
             ("Arquivo", "Salvar Procedimento...") => integration::save_procedure_dialog(self),
             ("Arquivo", "Sair") => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
-            ("G-code", "Baixar G-code") => integration::generate_tap(self),
+            ("G-code", "Gerar G-code") => integration::generate_tap(self),
+            ("G-code", "Baixar G-code") => download::download_tap(self),
             ("G-code", "Abrir no Mach3") => integration::open_in_mach3(self),
             ("G-code", "Copiar tudo") => panels::right::copy_gcode(self, ctx),
             ("Configurações", "Caminho (Mach3)...") => self.dialogs.open(DialogId::Mach3Path),
@@ -635,6 +638,13 @@ impl TfmApp {
             .clicked()
         {
             self.on_menu(ui.ctx(), "G-code", "Abrir no Mach3");
+        }
+        if ui
+            .button("Baixar G-code")
+            .on_hover_text("Conferir a checklist e salvar o .tap com o nome da ordem de serviço")
+            .clicked()
+        {
+            self.on_menu(ui.ctx(), "G-code", "Baixar G-code");
         }
         let generate =
             egui::Button::new(RichText::new("Gerar G-code").strong().color(Color32::WHITE))

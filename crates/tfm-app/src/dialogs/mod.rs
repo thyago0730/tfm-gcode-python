@@ -25,6 +25,7 @@ use crate::app::{NotifyKind, TfmApp};
 use crate::prefs;
 
 pub mod about;
+pub mod checklist;
 pub mod costs;
 pub mod formulas;
 pub mod mach3_path;
@@ -52,10 +53,12 @@ pub enum DialogId {
     About,
     Tutorial,
     Shortcuts,
+    /// Checklist do "Baixar G-code" (não existia no Python).
+    DownloadChecklist,
 }
 
 impl DialogId {
-    pub const ALL: [DialogId; 12] = [
+    pub const ALL: [DialogId; 13] = [
         DialogId::Costs,
         DialogId::Powders,
         DialogId::Formulas,
@@ -68,9 +71,10 @@ impl DialogId {
         DialogId::About,
         DialogId::Tutorial,
         DialogId::Shortcuts,
+        DialogId::DownloadChecklist,
     ];
 
-    /// Título da janela (os mesmos do app Python).
+    /// Título da janela (os mesmos do app Python; a checklist é nova).
     pub fn title(self) -> &'static str {
         match self {
             DialogId::Costs => "Custos de Operação",
@@ -85,6 +89,7 @@ impl DialogId {
             DialogId::About => "Sobre",
             DialogId::Tutorial => "Ajuda",
             DialogId::Shortcuts => "Atalhos",
+            DialogId::DownloadChecklist => "Baixar G-code: checklist",
         }
     }
 }
@@ -102,6 +107,7 @@ pub struct Dialogs {
     pub wps: wps::WpsState,
     pub maintenance: maintenance::MaintenanceState,
     pub tutorial: tutorial::TutorialState,
+    pub checklist: checklist::ChecklistState,
 }
 
 impl Dialogs {
@@ -126,6 +132,7 @@ impl Dialogs {
             DialogId::Wps => self.wps = Default::default(),
             DialogId::Maintenance => self.maintenance = Default::default(),
             DialogId::Tutorial => self.tutorial = Default::default(),
+            DialogId::DownloadChecklist => self.checklist = Default::default(),
             DialogId::RiskMatrix | DialogId::About | DialogId::Shortcuts => {}
         }
     }
@@ -157,6 +164,9 @@ pub fn show_dialogs(app: &mut TfmApp, ctx: &egui::Context) {
             DialogId::About => about::show(app, ctx, &mut open),
             DialogId::Tutorial => tutorial::show(app, &mut dialogs.tutorial, ctx, &mut open),
             DialogId::Shortcuts => shortcuts::show(app, ctx, &mut open),
+            DialogId::DownloadChecklist => {
+                checklist::show(app, &mut dialogs.checklist, ctx, &mut open)
+            }
         }
         if !open {
             dialogs.open.remove(&id);
@@ -235,7 +245,11 @@ mod tests {
         assert_eq!(DialogId::About.title(), "Sobre");
         assert_eq!(DialogId::Tutorial.title(), "Ajuda");
         assert_eq!(DialogId::Shortcuts.title(), "Atalhos");
-        assert_eq!(DialogId::ALL.len(), 12);
+        assert_eq!(
+            DialogId::DownloadChecklist.title(),
+            "Baixar G-code: checklist"
+        );
+        assert_eq!(DialogId::ALL.len(), 13);
     }
 
     #[test]

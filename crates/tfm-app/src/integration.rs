@@ -11,7 +11,9 @@
 //! abrir no Mach3) fica em [`IntegrationState::pending`] (campo `integration`
 //! do `TfmApp`) e o modal é desenhado por [`show_modals`] a cada quadro.
 //! "Abrir no Mach3" passa pelos mesmos bloqueios de "Gerar G-code" (campos,
-//! física, ISO 3834 e o alerta G53) e também registra auditoria. Os macros do
+//! física, ISO 3834 e o alerta G53) e também registra auditoria; "Baixar
+//! G-code" (módulo `download`) reutiliza os mesmos portões e a mesma ação
+//! pendente. Os macros do
 //! Mach3 (`_ensure_mach3_macros`) são [`mach3_path::install_macros`],
 //! reutilizado.
 //!
@@ -85,6 +87,13 @@ pub enum PendingAction {
     },
     /// "Abrir no Mach3": gravar `TFM_<data>_<hora>.tap` e iniciar o Mach3.
     OpenMach3 { text: String, params: Params },
+    /// "Baixar G-code": gravar o `.tap` no caminho escolhido e, ao lado, o
+    /// side-car `.audit.json` ([`crate::download::commit_download`]).
+    DownloadTap {
+        path: PathBuf,
+        text: String,
+        params: Params,
+    },
 }
 
 impl PendingAction {
@@ -93,6 +102,7 @@ impl PendingAction {
         match self {
             PendingAction::SaveTap { .. } => "Geração cancelada.",
             PendingAction::OpenMach3 { .. } => "Abertura no Mach3 cancelada.",
+            PendingAction::DownloadTap { .. } => "Download cancelado.",
         }
     }
 }
@@ -154,7 +164,7 @@ pub fn tap_filename(now: &NaiveDateTime) -> String {
     format!("TFM_{}.tap", now.format("%Y%m%d_%H%M%S"))
 }
 
-fn or_na(value: &str) -> &str {
+pub(crate) fn or_na(value: &str) -> &str {
     if value.trim().is_empty() {
         "N/A"
     } else {
@@ -382,7 +392,7 @@ fn generate_guarded(
 /// ainda está calculando (resultado defasado), avisa e devolve `None` em vez
 /// de gerar na thread da interface; ocioso, gera agora, protegido contra
 /// pânico. Qualquer falha já foi notificada quando devolve `None`.
-fn current_gcode(app: &mut TfmApp, params: &Params) -> Option<Vec<String>> {
+pub(crate) fn current_gcode(app: &mut TfmApp, params: &Params) -> Option<Vec<String>> {
     let key = params_key(params, &app.cfg);
     let cached = app
         .result
@@ -419,10 +429,11 @@ fn fields_ok(app: &mut TfmApp) -> bool {
     false
 }
 
-/// Os três bloqueios comuns a "Gerar G-code" e "Abrir no Mach3", na ordem do
-/// Python: campos que convertem, regras físicas (`validate_physical`) e ISO
-/// 3834. Devolve os parâmetros liberados; `None` já foi notificado.
-fn validated_params(app: &mut TfmApp) -> Option<Params> {
+/// Os três bloqueios comuns a "Gerar G-code", "Abrir no Mach3" e "Baixar
+/// G-code", na ordem do Python: campos que convertem, regras físicas
+/// (`validate_physical`) e ISO 3834. Devolve os parâmetros liberados; `None`
+/// já foi notificado.
+pub(crate) fn validated_params(app: &mut TfmApp) -> Option<Params> {
     if !fields_ok(app) {
         return None;
     }
@@ -446,7 +457,7 @@ fn validated_params(app: &mut TfmApp) -> Option<Params> {
 // Gerar G-code (.tap)
 // ---------------------------------------------------------------------------
 
-/// Botão "Gerar G-code", menu "G-code > Baixar G-code", "Salvar .tap" e
+/// Botão "Gerar G-code", menu "G-code > Gerar G-code", "Salvar .tap" e
 /// Ctrl+G: porta de `_generate_gcode_clicked`. Valida (física, depois ISO
 /// 3834), gera, pede o arquivo e grava — ou deixa a gravação pendente do
 /// alerta G53 ([`show_modals`]).
@@ -477,9 +488,11 @@ pub fn generate_tap(app: &mut TfmApp) {
 
 /// Executa a ação, ou a deixa pendente do alerta G53 quando o programa usa
 /// G53 ([`show_modals`] executa no "Sim").
-fn run_or_confirm(app: &mut TfmApp, action: PendingAction) {
+pub(crate) fn run_or_confirm(app: &mut TfmApp, action: PendingAction) {
     let text = match &action {
-        PendingAction::SaveTap { text, .. } | PendingAction::OpenMach3 { text, .. } => text,
+        PendingAction::SaveTap { text, .. }
+        | PendingAction::OpenMach3 { text, .. }
+        | PendingAction::DownloadTap { text, .. } => text,
     };
     if uses_g53(text) {
         app.integration.pending = Some(action);
@@ -493,6 +506,9 @@ fn run_action(app: &mut TfmApp, action: PendingAction) {
     match action {
         PendingAction::SaveTap { path, text, params } => commit_save(app, path, &text, &params),
         PendingAction::OpenMach3 { text, params } => launch_mach3(app, &text, &params),
+        PendingAction::DownloadTap { path, text, params } => {
+            crate::download::commit_download(app, path, &text, &params)
+        }
     }
 }
 
@@ -1174,6 +1190,12 @@ mod tests {
             params: Params::default(),
         };
         assert_eq!(open.cancel_message(), "Abertura no Mach3 cancelada.");
+        let download = PendingAction::DownloadTap {
+            path: PathBuf::from("OS-1.tap"),
+            text: "G53".to_string(),
+            params: Params::default(),
+        };
+        assert_eq!(download.cancel_message(), "Download cancelado.");
         assert_eq!(AUDIT_CATEGORY_MACH3, "GCode Generation (Mach3)");
     }
 
