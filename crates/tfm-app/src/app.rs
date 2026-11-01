@@ -13,6 +13,7 @@ use tfm_core::quality::QualityManager;
 
 use crate::compute::{params_key, ComputeHandle, ComputeResult};
 use crate::dialogs::{self, DialogId, Dialogs};
+use crate::integration::{self, IntegrationState};
 use crate::panels;
 use crate::panels::right::GcodeView;
 use crate::prefs::{self, UiSnapshot};
@@ -109,6 +110,8 @@ pub struct TfmApp {
     pub result: Option<ComputeResult>,
     pub notifications: Vec<Notification>,
     pub dialogs: Dialogs,
+    /// Ações que atravessam quadros (gravação do .tap pendente do alerta G53).
+    pub integration: IntegrationState,
     pub gcode_view: GcodeView,
     pub view3d: View3d,
     pub center_tab: CenterTab,
@@ -164,6 +167,7 @@ impl TfmApp {
             result: None,
             notifications: Vec::new(),
             dialogs: Dialogs::default(),
+            integration: IntegrationState::default(),
             gcode_view: GcodeView::default(),
             view3d: View3d,
             center_tab: CenterTab::View3d,
@@ -455,13 +459,18 @@ impl TfmApp {
         }
     }
 
-    /// Despacho dos itens de menu. Configurações, Qualidade e Ajuda abrem os
-    /// diálogos (ou agem na hora: instalar macropump, abrir a pasta de logs);
-    /// "Sair" fecha; as vistas da simulação são aceitas sem efeito e o resto
-    /// de Arquivo/G-code/Simulação fica para as próximas tasks.
+    /// Despacho dos itens de menu. Arquivo e G-code chamam as ações de
+    /// [`integration`] (procedimentos, .tap, Mach3, copiar); Configurações,
+    /// Qualidade e Ajuda abrem os diálogos (ou agem na hora: instalar
+    /// macropump, abrir a pasta de logs); Simulação age sobre a aba 3D;
+    /// "Sair" fecha.
     fn on_menu(&mut self, ctx: &egui::Context, menu: &str, item: &str) {
         match (menu, item) {
+            ("Arquivo", "Carregar Procedimento...") => integration::load_procedure_dialog(self),
+            ("Arquivo", "Salvar Procedimento...") => integration::save_procedure_dialog(self),
             ("Arquivo", "Sair") => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            ("G-code", "Baixar G-code") => integration::generate_tap(self),
+            ("G-code", "Abrir no Mach3") => integration::open_in_mach3(self),
             ("G-code", "Copiar tudo") => panels::right::copy_gcode(self, ctx),
             ("Configurações", "Caminho (Mach3)...") => self.dialogs.open(DialogId::Mach3Path),
             ("Configurações", "Instalar macropump (autoload)") => {
@@ -485,11 +494,11 @@ impl TfmApp {
             ("Ajuda", "Tutorial") => self.dialogs.open(DialogId::Tutorial),
             ("Ajuda", "Atalhos") => self.dialogs.open(DialogId::Shortcuts),
             ("Ajuda", "Sobre") => self.dialogs.open(DialogId::About),
-            (
-                "Simulação",
-                "Vista Isométrica" | "Vista Superior" | "Vista Lateral" | "Vista Frontal"
-                | "Vista Traseira",
-            ) => {}
+            ("Simulação", item) => {
+                if !integration::simulation_menu(ctx, item) {
+                    log::debug!("Menu Simulação > {item}: item desconhecido");
+                }
+            }
             _ => log::debug!("Menu {menu} > {item}: ação ainda não implementada"),
         }
     }
@@ -582,10 +591,10 @@ impl TfmApp {
                 .fill(self.palette.accent);
         if ui
             .add(generate)
-            .on_hover_text("Gerar o G-code com os parâmetros atuais")
+            .on_hover_text("Gerar o G-code com os parâmetros atuais e salvar o .tap")
             .clicked()
         {
-            log::debug!("Gerar G-code: ação ainda não implementada");
+            integration::generate_tap(self);
         }
         if self.compute.busy() {
             ui.spinner();
@@ -777,6 +786,8 @@ impl eframe::App for TfmApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.refresh_palette(&ctx);
+        // Atalhos antes dos painéis, para consumir as teclas antes dos widgets.
+        integration::handle_shortcuts(self, &ctx);
         self.receive_result();
         self.drive_compute(&ctx);
 
@@ -786,6 +797,7 @@ impl eframe::App for TfmApp {
         self.bottom_panel(ui);
         self.center(ui);
         dialogs::show_dialogs(self, &ctx);
+        integration::show_modals(self, &ctx);
 
         self.track_prefs(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) {
