@@ -938,6 +938,60 @@ fn dimension(
     painter.text(mid, Align2::CENTER_BOTTOM, label, FontId::proportional(9.5), ink.text);
 }
 
+/// Comprimento fixo, em px, da ponta das setas dos eixos do esquema. O
+/// `Painter::arrow` do egui faz a ponta com 25 % do comprimento do eixo, o que
+/// aqui atravessaria o desenho; o Python usa uma ponta `->` pequena e fixa.
+pub const ARROW_HEAD_PX: f32 = 7.0;
+// Garantia em tempo de compilação: a ponta nunca volta a crescer.
+const _: () = assert!(ARROW_HEAD_PX <= 8.0, "ponta da seta do esquema deve ter no máximo 8 px");
+
+/// Abertura de cada farpa da seta em relação ao eixo (a mesma do egui).
+const ARROW_BARB_DEG: f32 = 36.0;
+
+/// Pontas das duas farpas de uma seta de `from` a `to`, com `head` px de
+/// comprimento. Um vetor nulo ou não finito devolve a própria ponta (sem NaN).
+pub fn arrow_barbs(from: Pos2, to: Pos2, head: f32) -> [Pos2; 2] {
+    let dir = to - from;
+    let len = dir.length();
+    if !len.is_finite() || len <= f32::EPSILON {
+        return [to, to];
+    }
+    let back = dir / len * head;
+    let rot = egui::emath::Rot2::from_angle(ARROW_BARB_DEG.to_radians());
+    [to - rot * back, to - rot.inverse() * back]
+}
+
+/// Seta de eixo: haste em `line_segment` e ponta de [`ARROW_HEAD_PX`].
+fn axis_arrow(painter: &egui::Painter, from: Pos2, to: Pos2, stroke: Stroke) {
+    painter.line_segment([from, to], stroke);
+    let [a, b] = arrow_barbs(from, to, ARROW_HEAD_PX);
+    painter.line_segment([to, a], stroke);
+    painter.line_segment([to, b], stroke);
+}
+
+/// Trechos `[início, fim)` de amostras consecutivas cujo topo passa de `y`,
+/// com pelo menos duas amostras (uma divisória vira uma linha por trecho, em
+/// vez de um segmento por par de amostras).
+pub fn runs_above(prof: &[ProfileSample], y: f64) -> Vec<(usize, usize)> {
+    let mut runs = Vec::new();
+    let mut start: Option<usize> = None;
+    for (i, sample) in prof.iter().enumerate() {
+        match (sample.top > y, start) {
+            (true, None) => start = Some(i),
+            (false, Some(begin)) => {
+                runs.push((begin, i));
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(begin) = start {
+        runs.push((begin, prof.len()));
+    }
+    runs.retain(|(begin, end)| end - begin >= 2);
+    runs
+}
+
 /// Desenha o esquema: eixos, camadas coloridas pela paleta recortadas pelo
 /// perfil, zonas de sobreposição, penetração, divisórias, cotas e legenda.
 fn draw_schematic(
@@ -984,12 +1038,15 @@ fn draw_schematic(
     let frame = Frame2d::new(area, x_min, x_max, y_min, y_max);
     let thin = Stroke::new(1.15, ink.text);
 
-    // Eixos com seta (comprimento e altura).
+    // Eixos com seta de ponta fixa (comprimento e altura).
     let axis = Stroke::new(1.4, ink.text);
-    let origin = frame.at(-geo.margin_x * 0.10, 0.0);
-    painter.arrow(origin, frame.at(x_max, 0.0) - origin, axis);
-    let origin = frame.at(-geo.margin_x * 0.02, 0.0);
-    painter.arrow(origin, frame.at(-geo.margin_x * 0.02, y_max * 0.88) - origin, axis);
+    axis_arrow(painter, frame.at(-geo.margin_x * 0.10, 0.0), frame.at(x_max, 0.0), axis);
+    axis_arrow(
+        painter,
+        frame.at(-geo.margin_x * 0.02, 0.0),
+        frame.at(-geo.margin_x * 0.02, y_max * 0.88),
+        axis,
+    );
 
     // Penetração (diluição) abaixo da base.
     let dilution = with_alpha(DILUTION_COLOR, 0.42);
@@ -1023,10 +1080,11 @@ fn draw_schematic(
             if y >= top_y - 1e-6 {
                 continue;
             }
-            for pair in prof.windows(2) {
-                if pair[0].top > y && pair[1].top > y {
-                    painter.line_segment([frame.at(pair[0].x, y), frame.at(pair[1].x, y)], split);
-                }
+            // Uma linha por trecho do perfil acima da divisória, não um
+            // segmento por par de amostras.
+            for (begin, end) in runs_above(&prof, y) {
+                let points: Vec<Pos2> = prof[begin..end].iter().map(|s| frame.at(s.x, y)).collect();
+                painter.add(Shape::line(points, split));
             }
             let tick = Stroke::new(0.8, ink.weak);
             painter.line_segment([frame.at(-geo.margin_x * 0.04, y), frame.at(0.0, y)], tick);
@@ -1091,7 +1149,10 @@ fn draw_schematic(
     let bold = FontId::proportional(11.0);
     let small = FontId::proportional(9.5);
     painter.text(frame.at(-geo.margin_x * 0.45, y_max * 0.90), Align2::LEFT_CENTER, "Altura", bold.clone(), ink.strong);
-    let axis_label = frame.at(length * 0.70, -(h * 0.18).max(0.14));
+    // Rótulo logo abaixo do eixo e legenda numa linha própria mais abaixo
+    // (em px), para um não cobrir o outro.
+    let axis_px = frame.at(0.0, 0.0).y;
+    let axis_label = pos2(frame.at(length * 0.70, 0.0).x, axis_px + 4.0);
     painter.text(axis_label, Align2::LEFT_TOP, "Comprimento (mm)", bold, ink.strong);
     painter.text(frame.at(-geo.margin_x * 0.74, top_y * 0.5), Align2::LEFT_CENTER, "camadas", small.clone(), ink.weak);
     painter.text(frame.at(-geo.margin_x * 0.12, 0.0), Align2::RIGHT_CENTER, "0", small.clone(), ink.weak);
@@ -1102,7 +1163,7 @@ fn draw_schematic(
     painter.line_segment([frame.at(-geo.margin_x * 0.05, 0.0), frame.at(0.0, 0.0)], tick);
 
     // Legenda abaixo do eixo (em pixels): Solda / Sobreposicao / Diluicao.
-    let legend_y = frame.at(0.0, -(h * 0.30).max(0.20)).y;
+    let legend_y = (axis_px + 28.0).min(area.max.y - 6.0);
     let mut x = frame.at(length * 0.02, 0.0).x;
     let items = [
         ("Solda".to_string(), palette.layer_color(0)),
@@ -1410,5 +1471,95 @@ mod tests {
         ctx.run_ui(tiny, |ui| process_dashboard(ui, &est, &layered, &Palette::dark()))
             .textures_delta
             .clear();
+    }
+
+    #[test]
+    fn setas_dos_eixos_tem_ponta_fixa() {
+        // `ARROW_HEAD_PX <= 8` é checado em tempo de compilação ao lado da constante.
+        let tip = pos2(400.0, 100.0);
+        let [a, b] = arrow_barbs(pos2(0.0, 100.0), tip, ARROW_HEAD_PX);
+        for barb in [a, b] {
+            assert!(((barb - tip).length() - ARROW_HEAD_PX).abs() < 1e-3, "{barb:?}");
+            assert!(barb.x < tip.x, "farpa atrás da ponta: {barb:?}");
+        }
+        // Farpas simétricas em relação ao eixo.
+        assert!((a.y - 100.0 + (b.y - 100.0)).abs() < 1e-3);
+        assert!((a.y - b.y).abs() > 1.0);
+        // Eixo vertical: a ponta não cresce com o comprimento do eixo.
+        let tip = pos2(50.0, 10.0);
+        let [a, b] = arrow_barbs(pos2(50.0, 900.0), tip, ARROW_HEAD_PX);
+        assert!(((a - tip).length() - ARROW_HEAD_PX).abs() < 1e-3);
+        assert!(b.y > tip.y);
+        // Vetor nulo: nada de NaN.
+        let [a, b] = arrow_barbs(tip, tip, ARROW_HEAD_PX);
+        assert_eq!([a, b], [tip, tip]);
+    }
+
+    #[test]
+    fn divisorias_coalescidas_por_trecho() {
+        let prof: Vec<ProfileSample> = [0.0, 2.0, 2.0, 0.0, 2.0, 2.0, 2.0, 0.0, 2.0]
+            .iter()
+            .enumerate()
+            .map(|(i, top)| ProfileSample {
+                x: i as f64,
+                top: *top,
+                bottom: 0.0,
+                overlaps: 1,
+            })
+            .collect();
+        // Dois trechos acima de y = 1; a amostra isolada no fim não vira linha.
+        assert_eq!(runs_above(&prof, 1.0), vec![(1, 3), (4, 7)]);
+        assert_eq!(runs_above(&prof, 3.0), Vec::<(usize, usize)>::new());
+        assert_eq!(runs_above(&prof, -1.0), vec![(0, 9)]);
+        assert!(runs_above(&[], 1.0).is_empty());
+    }
+
+    #[test]
+    fn dashboard_fica_dentro_dos_cartoes() {
+        let palette = Palette::light();
+        let mut est = empty_estimates();
+        est.time_hours = 2.75;
+        est.dilution_pct = 12.0;
+        est.costs = CostSummary {
+            powder_cost: 120.0,
+            gas_cost: 15.5,
+            labor_cost: 80.0,
+            machine_cost: 40.0,
+            powder_kg: 0.42,
+            gas_m3: 2.1,
+            currency: "R$".to_string(),
+            ..Default::default()
+        };
+        let params = Params {
+            num_camadas: 4,
+            ..Default::default()
+        };
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(900.0, 620.0));
+        let ctx = Context::default();
+        let input = RawInput {
+            screen_rect: Some(screen),
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input.clone(), |ui| process_dashboard(ui, &est, &params, &palette));
+        out.textures_delta.clear();
+        // Cada cartão pinta com um painter recortado ao seu retângulo: setas,
+        // cotas e textos têm de caber nele (nada vaza para o vizinho).
+        let mut shapes_in_cards = 0usize;
+        for clipped in &out.shapes {
+            let clip = clipped.clip_rect;
+            if clip.width() >= screen.width() * 0.9 {
+                continue; // painter sem recorte: fundos dos cartões / raiz
+            }
+            let bounds = clipped.shape.visual_bounding_rect();
+            if !bounds.is_finite() || !bounds.is_positive() {
+                continue;
+            }
+            shapes_in_cards += 1;
+            assert!(
+                clip.expand(2.0).contains_rect(bounds),
+                "forma {bounds:?} vaza do cartão {clip:?}"
+            );
+        }
+        assert!(shapes_in_cards > 50, "poucas formas nos cartões: {shapes_in_cards}");
     }
 }
