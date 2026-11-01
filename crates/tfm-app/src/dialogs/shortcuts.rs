@@ -16,7 +16,10 @@ pub const SHORTCUTS: [(&str, &str); 9] = [
     ("F5", "Recalcular"),
     ("F1", "Ajuda"),
     ("Espaço", "Play/pause da simulação"),
-    ("1–5", "Vistas: Isométrica, Superior, Lateral, Frontal, Traseira"),
+    (
+        "1–5",
+        "Vistas: Isométrica, Superior, Lateral, Frontal, Traseira",
+    ),
 ];
 
 pub fn show(app: &mut TfmApp, ctx: &egui::Context, open: &mut bool) {
@@ -61,7 +64,17 @@ mod tests {
         let keys: Vec<&str> = SHORTCUTS.iter().map(|(k, _)| *k).collect();
         assert_eq!(
             keys,
-            ["Ctrl+S", "Ctrl+O", "Ctrl+G", "Ctrl+M", "Ctrl+Shift+C", "F5", "F1", "Espaço", "1–5"]
+            [
+                "Ctrl+S",
+                "Ctrl+O",
+                "Ctrl+G",
+                "Ctrl+M",
+                "Ctrl+Shift+C",
+                "F5",
+                "F1",
+                "Espaço",
+                "1–5"
+            ]
         );
     }
 }

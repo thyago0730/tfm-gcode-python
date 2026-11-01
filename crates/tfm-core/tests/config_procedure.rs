@@ -98,7 +98,10 @@ fn config_missing_file_saves_full_structure() {
     let cfg = AppConfig::load(&path);
 
     assert_eq!(cfg, AppConfig::default());
-    assert!(path.exists(), "load grava o arquivo, como ConfigManager.load()");
+    assert!(
+        path.exists(),
+        "load grava o arquivo, como ConfigManager.load()"
+    );
     let text = fs::read_to_string(&path).unwrap();
     let v: Value = serde_json::from_str(&text).unwrap();
     let keys: Vec<&str> = v.as_object().unwrap().keys().map(String::as_str).collect();
@@ -118,7 +121,10 @@ fn config_missing_file_saves_full_structure() {
     );
     assert_eq!(v["formulas"]["expressions"].as_object().unwrap().len(), 20);
     assert_eq!(v["powders"].as_array().unwrap().len(), 1);
-    assert_eq!(v["machine_profiles"]["default"]["limits"]["max_feed_linear"], json!(5000.0));
+    assert_eq!(
+        v["machine_profiles"]["default"]["limits"]["max_feed_linear"],
+        json!(5000.0)
+    );
     assert_eq!(v["integration"]["write_autoload_txt"], json!(true));
     assert!(
         text.contains("\n    \"costs\": {\n        \"powder_brl_kg\": 250.0,\n"),
@@ -128,7 +134,11 @@ fn config_missing_file_saves_full_structure() {
     // o Python garante a pasta de procedimentos ao salvar: relativa à raiz do
     // app (`root_dir / proc_path`), não à pasta do config.json
     assert!(!dir.path().join("sub").join("procedures").exists());
-    assert!(cfg.procedures_dir().is_dir(), "{}", cfg.procedures_dir().display());
+    assert!(
+        cfg.procedures_dir().is_dir(),
+        "{}",
+        cfg.procedures_dir().display()
+    );
 }
 
 #[test]
@@ -147,7 +157,12 @@ fn repo_config_json_round_trips() {
     // O arquivo regravado tem as nove seções e mantém todas as chaves e
     // valores do usuário (inclusive extras de `costs` e `ui.sashes`).
     let saved = read_json(&path);
-    let saved_keys: Vec<&str> = saved.as_object().unwrap().keys().map(String::as_str).collect();
+    let saved_keys: Vec<&str> = saved
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     assert_eq!(
         saved_keys,
         [
@@ -194,8 +209,12 @@ fn default_formulas_match_python_get_default_formulas() {
         f.expressions["powder_mass_kg"],
         "((circumference_mm * (comprimento_revestir + lead_in + lead_out) / 10000) * (num_camadas * espessura_camada) * powder_factor)"
     );
-    assert!(f.notes.starts_with("Variáveis disponíveis: diametro, comprimento_revestir"));
-    assert!(f.notes.ends_with("Consumo de pó calculado por área e espessura * fator."));
+    assert!(f
+        .notes
+        .starts_with("Variáveis disponíveis: diametro, comprimento_revestir"));
+    assert!(f
+        .notes
+        .ends_with("Consumo de pó calculado por área e espessura * fator."));
     // O config.json do repositório contém exatamente essas 20 expressões.
     let repo: Value = serde_json::from_str(&fs::read_to_string(REPO_CONFIG).unwrap()).unwrap();
     let repo_expr = repo["formulas"]["expressions"].as_object().unwrap();
@@ -208,11 +227,23 @@ fn default_formulas_match_python_get_default_formulas() {
 #[test]
 fn config_resolve_path_in_debug_points_to_workspace_config() {
     let path = AppConfig::resolve_path();
-    assert!(path.ends_with(Path::new("config").join("config.json")), "{}", path.display());
+    assert!(
+        path.ends_with(Path::new("config").join("config.json")),
+        "{}",
+        path.display()
+    );
     if cfg!(debug_assertions) {
         assert!(path.is_absolute());
-        assert!(path.exists(), "{} deve ser o config/config.json do repositório", path.display());
-        assert!(!path.to_string_lossy().starts_with(r"\\?\"), "sem prefixo verbatim: {}", path.display());
+        assert!(
+            path.exists(),
+            "{} deve ser o config/config.json do repositório",
+            path.display()
+        );
+        assert!(
+            !path.to_string_lossy().starts_with(r"\\?\"),
+            "sem prefixo verbatim: {}",
+            path.display()
+        );
         // mesma coisa que canonicalize() devolve, só sem o prefixo verbatim
         let canon = path.canonicalize().unwrap().to_string_lossy().into_owned();
         assert_eq!(canon.trim_start_matches(r"\\?\"), path.to_string_lossy());
@@ -225,7 +256,10 @@ fn procedures_dir_is_relative_to_app_root() {
     // ou raiz do projeto (dev) — nunca a pasta que contém o config.json.
     let root = AppConfig::app_root();
     assert!(root.is_absolute(), "{}", root.display());
-    assert_eq!(root.join("config").join("config.json"), AppConfig::resolve_path());
+    assert_eq!(
+        root.join("config").join("config.json"),
+        AppConfig::resolve_path()
+    );
 
     // "procedures", como no config.json real do usuário
     let cfg = AppConfig::default();
@@ -310,15 +344,29 @@ fn legacy_python_procedure_loads() {
     let p = load_procedure(&path).expect("procedimento legado carrega");
 
     assert_eq!(Operation::from_params(&p), Operation::OscilacaoLinear);
-    assert_eq!(p.welding_mode, WeldingMode::OscilacaoLinear, "valor cru preservado");
-    assert_eq!(p.velocidade_de_deposicao, 150.0, "alias velocidade_soldagem");
+    assert_eq!(
+        p.welding_mode,
+        WeldingMode::OscilacaoLinear,
+        "valor cru preservado"
+    );
+    assert_eq!(
+        p.velocidade_de_deposicao, 150.0,
+        "alias velocidade_soldagem"
+    );
     assert_eq!(p.nome_procedimento, "Eixo 01");
     assert_eq!(p.lead_in, 5.0);
     assert_eq!(p.direcao_soldagem, Direction::EsquerdaDireita);
-    assert_eq!(p.sentido_rotacao, Rotation::Antihoraria, "string de display mapeada");
+    assert_eq!(
+        p.sentido_rotacao,
+        Rotation::Antihoraria,
+        "string de display mapeada"
+    );
     assert_eq!(p.oscillation_type, Some(OscillationType::QuadradaContinua));
     assert!(p.torch_retract_on_ignite);
-    assert_eq!(p.diametro, 50.0, "d_inicial é ignorado (chave desconhecida)");
+    assert_eq!(
+        p.diametro, 50.0,
+        "d_inicial é ignorado (chave desconhecida)"
+    );
     // setdefault do _load_procedure_file para chaves ausentes
     assert_eq!(p.lead_out, 5.0);
     assert_eq!(p.oscilacao_comprimento, 10.0);
@@ -329,7 +377,10 @@ fn legacy_python_procedure_loads() {
 fn procedure_setdefaults_do_not_override_present_keys() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("p.json");
-    write(&path, r#"{"lead_in": 0, "lead_out": "2,5", "oscilacao_comprimento": 7}"#);
+    write(
+        &path,
+        r#"{"lead_in": 0, "lead_out": "2,5", "oscilacao_comprimento": 7}"#,
+    );
     let p = load_procedure(&path).unwrap();
     assert_eq!(p.lead_in, 0.0);
     assert_eq!(p.lead_out, 2.5);
@@ -354,7 +405,11 @@ fn procedure_unknown_enum_values_fall_back_to_defaults() {
     assert_eq!(p.direcao_soldagem, Direction::EsquerdaDireita);
     assert_eq!(p.sentido_rotacao, Rotation::Horaria);
     assert_eq!(p.multiperfil_strategy, Default::default());
-    assert_eq!(p.flat_orientation, tfm_core::params::FlatOrientation::Y, "x/y minúsculos aceitos");
+    assert_eq!(
+        p.flat_orientation,
+        tfm_core::params::FlatOrientation::Y,
+        "x/y minúsculos aceitos"
+    );
 }
 
 #[test]
@@ -407,7 +462,10 @@ fn procedure_oscilacao_without_type_is_saved_as_linear() {
 fn procedure_errors_are_reported() {
     let dir = tempfile::tempdir().unwrap();
     let missing = dir.path().join("nao_existe.json");
-    assert!(matches!(load_procedure(&missing), Err(ProcedureError::Io { .. })));
+    assert!(matches!(
+        load_procedure(&missing),
+        Err(ProcedureError::Io { .. })
+    ));
 
     let bad = dir.path().join("bad.json");
     write(&bad, "{ nope");
@@ -415,7 +473,10 @@ fn procedure_errors_are_reported() {
 
     let array = dir.path().join("array.json");
     write(&array, "[1, 2, 3]");
-    assert!(matches!(load_procedure(&array), Err(ProcedureError::NotAnObject)));
+    assert!(matches!(
+        load_procedure(&array),
+        Err(ProcedureError::NotAnObject)
+    ));
 
     let garbage = dir.path().join("garbage.json");
     write(&garbage, r#"{"diametro": "abc"}"#);
@@ -451,10 +512,27 @@ fn audit_log_appends_to_daily_file() {
     assert_eq!(entries[1]["user"], json!("Thiago"));
     let ts = entries[0]["timestamp"].as_str().unwrap();
     // datetime.now().isoformat(): AAAA-MM-DDTHH:MM:SS.ffffff
-    assert!(ts.starts_with(&today.format("%Y-%m-%dT").to_string()), "{ts}");
+    assert!(
+        ts.starts_with(&today.format("%Y-%m-%dT").to_string()),
+        "{ts}"
+    );
     assert_eq!(ts.len(), 26, "{ts}");
-    let keys: Vec<&str> = entries[0].as_object().unwrap().keys().map(String::as_str).collect();
-    assert_eq!(keys, ["timestamp", "category", "detail", "user", "software_version"]);
+    let keys: Vec<&str> = entries[0]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            "timestamp",
+            "category",
+            "detail",
+            "user",
+            "software_version"
+        ]
+    );
 
     // arquivo corrompido: recomeça do zero sem falhar (como o Python)
     write(&path, "{ corrompido");
@@ -489,7 +567,9 @@ fn iso3834_blocks_expired_operator() {
     let dir = tempfile::tempdir().unwrap();
     let qm = quality(
         dir.path(),
-        Some(r#"[{"name": "Thiago", "qualification_id": "001", "qualification_validity": "2000-01-01"}]"#),
+        Some(
+            r#"[{"name": "Thiago", "qualification_id": "001", "qualification_validity": "2000-01-01"}]"#,
+        ),
         None,
     );
     let err = qm.check_operator_qualification("Thiago").unwrap_err();
@@ -558,7 +638,11 @@ fn iso3834_blocks_parameter_outside_wps_limits() {
         ),
     );
     let wps = qm.wps("E2").unwrap();
-    assert_eq!(wps.limits.len(), 3, "limite sem max/min numérico é descartado");
+    assert_eq!(
+        wps.limits.len(),
+        3,
+        "limite sem max/min numérico é descartado"
+    );
     assert_eq!(wps.limits["corrente_arco"].max, 140.0);
 
     let mut p = Params {
@@ -582,8 +666,10 @@ fn operators_accept_legacy_validity_key_and_save_both_keys() {
     let dir = tempfile::tempdir().unwrap();
     let mut qm = quality(
         dir.path(),
-        Some(r#"[{"name": "Thiago", "qualification_id": "001", "validity": " 2099-12-31 "},
-                 {"code": "sem-nome"}, "lixo", {"name": ""}]"#),
+        Some(
+            r#"[{"name": "Thiago", "qualification_id": "001", "validity": " 2099-12-31 "},
+                 {"code": "sem-nome"}, "lixo", {"name": ""}]"#,
+        ),
         None,
     );
     assert_eq!(qm.operators.len(), 1, "entradas sem nome são ignoradas");
@@ -593,16 +679,32 @@ fn operators_accept_legacy_validity_key_and_save_both_keys() {
     qm.add_operator("Maria", "M1", "Q2", "2099-01-01");
     qm.add_operator("Thiago", "", "", "");
     assert_eq!(qm.operator_names(), ["Maria", "Thiago"]);
-    assert_eq!(qm.operator("Thiago").unwrap().qualification_id, "001", "campos vazios não sobrescrevem");
+    assert_eq!(
+        qm.operator("Thiago").unwrap().qualification_id,
+        "001",
+        "campos vazios não sobrescrevem"
+    );
 
-    let saved = read_json(&dir.path().join("data").join("quality").join("operators.json"));
+    let saved = read_json(
+        &dir.path()
+            .join("data")
+            .join("quality")
+            .join("operators.json"),
+    );
     let first = &saved.as_array().unwrap()[0];
     assert_eq!(first["name"], json!("Thiago"));
     assert_eq!(first["qualification_validity"], json!("2099-12-31"));
-    assert_eq!(first["validity"], json!("2099-12-31"), "chave legada gravada como no Python");
+    assert_eq!(
+        first["validity"],
+        json!("2099-12-31"),
+        "chave legada gravada como no Python"
+    );
 
     qm.remove_operator("Maria");
-    let again = QualityManager::load(&dir.path().join("config"), &dir.path().join("data").join("quality"));
+    let again = QualityManager::load(
+        &dir.path().join("config"),
+        &dir.path().join("data").join("quality"),
+    );
     assert_eq!(again.operator_names(), ["Thiago"]);
 }
 
@@ -611,11 +713,17 @@ fn maintenance_defaults_and_alerts() {
     let dir = tempfile::tempdir().unwrap();
     let mut qm = quality(dir.path(), None, None);
     assert!(dir.path().join("config").is_dir(), "load cria config_dir");
-    assert!(dir.path().join("data").join("quality").is_dir(), "load cria data_dir");
+    assert!(
+        dir.path().join("data").join("quality").is_dir(),
+        "load cria data_dir"
+    );
 
     let m = &qm.maintenance;
     assert_eq!(m.total_arc_time_minutes, 0.0);
-    assert_eq!(m.last_maintenance_date, Local::now().format("%Y-%m-%d").to_string());
+    assert_eq!(
+        m.last_maintenance_date,
+        Local::now().format("%Y-%m-%d").to_string()
+    );
     let names: Vec<&str> = m.components.keys().map(String::as_str).collect();
     assert_eq!(names, ["bico_constritor", "eletrodo", "mangueiras"]);
     assert_eq!(m.components["bico_constritor"].limit_hours, 20.0);
@@ -643,7 +751,10 @@ fn maintenance_defaults_and_alerts() {
     // gravado em config_dir/maintenance_log.json e relido igual
     let path = dir.path().join("config").join("maintenance_log.json");
     assert_eq!(read_json(&path)["total_arc_time_minutes"], json!(1200.0));
-    let again = QualityManager::load(&dir.path().join("config"), &dir.path().join("data").join("quality"));
+    let again = QualityManager::load(
+        &dir.path().join("config"),
+        &dir.path().join("data").join("quality"),
+    );
     assert_eq!(again.maintenance, qm.maintenance);
 }
 
@@ -655,7 +766,10 @@ fn reset_component_records_history() {
     qm.reset_component("bico_constritor");
     qm.reset_component("nao_existe");
 
-    assert_eq!(qm.maintenance.components["bico_constritor"].current_hours, 0.0);
+    assert_eq!(
+        qm.maintenance.components["bico_constritor"].current_hours,
+        0.0
+    );
     assert_eq!(qm.maintenance.components["eletrodo"].current_hours, 10.0);
     assert_eq!(qm.maintenance.history.len(), 1);
     let h = &qm.maintenance.history[0];
@@ -666,7 +780,10 @@ fn reset_component_records_history() {
     // arquivo parcial: chaves ausentes vêm do default (merge do _load_maintenance)
     let path = dir.path().join("config").join("maintenance_log.json");
     write(&path, r#"{"total_arc_time_minutes": 42.0}"#);
-    let again = QualityManager::load(&dir.path().join("config"), &dir.path().join("data").join("quality"));
+    let again = QualityManager::load(
+        &dir.path().join("config"),
+        &dir.path().join("data").join("quality"),
+    );
     assert_eq!(again.maintenance.total_arc_time_minutes, 42.0);
     assert_eq!(again.maintenance.components.len(), 3);
 }
@@ -676,14 +793,20 @@ fn heat_input_formula() {
     let hi = QualityManager::heat_input_kj_mm(25.0, 180.0, 120.0, 0.8);
     assert!((hi - 1.8).abs() < 1e-9, "{hi}");
     assert_eq!(QualityManager::heat_input_kj_mm(25.0, 180.0, 0.0, 0.8), 0.0);
-    assert_eq!(QualityManager::heat_input_kj_mm(25.0, 180.0, -5.0, 0.8), 0.0);
+    assert_eq!(
+        QualityManager::heat_input_kj_mm(25.0, 180.0, -5.0, 0.8),
+        0.0
+    );
 }
 
 #[test]
 fn estimate_dilution_is_clamped() {
     assert!((QualityManager::estimate_dilution(100.0, 20.0, 120.0) - 10.5).abs() < 1e-9);
     assert_eq!(QualityManager::estimate_dilution(10.0, 20.0, 120.0), 0.0);
-    assert_eq!(QualityManager::estimate_dilution(1000.0, 10.0, 120.0), 100.0);
+    assert_eq!(
+        QualityManager::estimate_dilution(1000.0, 10.0, 120.0),
+        100.0
+    );
     assert_eq!(QualityManager::estimate_dilution(100.0, 0.0, 120.0), 0.0);
 }
 

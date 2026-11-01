@@ -546,9 +546,7 @@ impl AppConfig {
     /// `_get_active_machine_limits`: limites do perfil ativo; perfil
     /// desconhecido => limites padrão.
     pub fn active_limits(&self) -> MachineLimits {
-        self.active_profile()
-            .map(|p| p.limits)
-            .unwrap_or_default()
+        self.active_profile().map(|p| p.limits).unwrap_or_default()
     }
 
     /// Pó cadastrado com este nome.
@@ -605,7 +603,9 @@ fn vec_from_value<T: DeserializeOwned>(v: Value) -> Option<Vec<T>> {
 
 /// Cada entrada é desserializada separadamente; inválidas são descartadas.
 fn map_from_value<T: DeserializeOwned>(v: Value) -> Option<IndexMap<String, T>> {
-    let Value::Object(entries) = v else { return None };
+    let Value::Object(entries) = v else {
+        return None;
+    };
     Some(
         entries
             .into_iter()

@@ -201,7 +201,10 @@ fn square_continuous_long_program_under_2s() {
     let lines = generate_with_timestamp(&p, TIMESTAMP).expect("geração da quadrada contínua");
     let elapsed = start.elapsed();
     // Visível com `--nocapture`, para acompanhar a margem em outras máquinas.
-    eprintln!("quadrada contínua longa: {} linhas em {elapsed:?}", lines.len());
+    eprintln!(
+        "quadrada contínua longa: {} linhas em {elapsed:?}",
+        lines.len()
+    );
 
     assert!(
         lines.len() > 10_000,

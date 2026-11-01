@@ -56,7 +56,11 @@ pub fn generate_square(p: &Params, timestamp: &str) -> Result<Vec<String>, GenEr
 
 /// `_generate_square_test_oscillation` (operação "Quadrada Contínua").
 pub fn generate_square_continuous(p: &Params, timestamp: &str) -> Result<Vec<String>, GenError> {
-    Ok(generate_layers(p, timestamp, build_square_continuous_segment))
+    Ok(generate_layers(
+        p,
+        timestamp,
+        build_square_continuous_segment,
+    ))
 }
 
 /// Laço de camadas comum aos três `_generate_*`: cabeçalho, um segmento por
@@ -77,7 +81,9 @@ fn generate_layers(
         if i == 0 {
             // As camadas têm o mesmo tamanho: reserva tudo de uma vez em vez
             // de duplicar o `Vec` dezenas de vezes num programa de 10⁶ linhas.
-            let total = seg.len().saturating_mul(usize::try_from(layers).unwrap_or(1));
+            let total = seg
+                .len()
+                .saturating_mul(usize::try_from(layers).unwrap_or(1));
             out.reserve(total.min(RESERVE_CAP));
         }
         out.extend(seg);
@@ -216,7 +222,10 @@ impl WeldTail {
     /// Início e fim no mesmo ponto (cordão ainda sem deslocamento).
     fn at(x: f64, a: f64) -> WeldTail {
         let pos = Pos::xa(x, a);
-        WeldTail { start: pos, end: pos }
+        WeldTail {
+            start: pos,
+            end: pos,
+        }
     }
 
     fn set(&mut self, x0: f64, a0: f64, x1: f64, a1: f64) {
@@ -445,14 +454,24 @@ fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
 
         if !fr.is_internal && passo_idx == 0 && p.lead_in.abs() > 1e-6 {
             seg.push(format!("G01 F{fx} X{}", f3(x_osc_volta)));
-            tail.set(current_x_start_pos, current_a_total, x_osc_volta, current_a_total);
+            tail.set(
+                current_x_start_pos,
+                current_a_total,
+                x_osc_volta,
+                current_a_total,
+            );
         }
 
         if passo_idx == n - 1 {
             seg.push(CLOSE_TO_END.to_string());
             if (fr.x_end - current_x_start_pos).abs() > 1e-6 {
                 seg.push(format!("G01 F{fx} X{}", f3(fr.x_end)));
-                tail.set(current_x_start_pos, current_a_total, fr.x_end, current_a_total);
+                tail.set(
+                    current_x_start_pos,
+                    current_a_total,
+                    fr.x_end,
+                    current_a_total,
+                );
             }
         } else {
             let delta_a_half = rotation_sign * (g.actual_delta_a_deg / 2.0);
@@ -523,7 +542,9 @@ impl Staircase {
         let n_ang = usize::try_from(g.num_passos_angulares_por_volta).unwrap_or(0);
         let per_passo = 8usize.saturating_add(n_ang.saturating_mul(per_k));
         let n = usize::try_from(g.num_passos_axiais).unwrap_or(0);
-        8usize.saturating_add(n.saturating_mul(per_passo)).min(RESERVE_CAP)
+        8usize
+            .saturating_add(n.saturating_mul(per_passo))
+            .min(RESERVE_CAP)
     }
 
     fn emit(&self, seg: &mut Vec<String>, x0: f64, a0: f64, x1: f64, a1: f64) {
@@ -598,7 +619,12 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
             // Lead-in somente em X.
             if !fr.is_internal && p.lead_in.abs() > 1e-6 {
                 seg.push(format!("G01 F{} X{}", f1(g.feed_x), f3(x_osc_volta)));
-                tail.set(current_x_start_pos, current_a_total, x_osc_volta, current_a_total);
+                tail.set(
+                    current_x_start_pos,
+                    current_a_total,
+                    x_osc_volta,
+                    current_a_total,
+                );
             }
         }
 
@@ -608,7 +634,12 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
             let dist_ate_fim = (fr.x_end - current_x_start_pos).abs();
             if dist_ate_fim > 1e-6 {
                 seg.push(format!("G01 F{} X{}", f1(g.feed_x), f3(fr.x_end)));
-                tail.set(current_x_start_pos, current_a_total, fr.x_end, current_a_total);
+                tail.set(
+                    current_x_start_pos,
+                    current_a_total,
+                    fr.x_end,
+                    current_a_total,
+                );
             }
         } else {
             // Oscilação por passos angulares com decomposição em escada.
@@ -621,13 +652,30 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
                 ));
                 // Ida em X e A.
                 let target_a_ida = current_a_total + delta_a_half;
-                stairs.emit(&mut seg, current_x_start_pos, current_a_total, x_osc_ida, target_a_ida);
+                stairs.emit(
+                    &mut seg,
+                    current_x_start_pos,
+                    current_a_total,
+                    x_osc_ida,
+                    target_a_ida,
+                );
                 current_a_total = target_a_ida;
                 current_x_start_pos = x_osc_ida;
                 // Volta em X e A.
                 let target_a_volta = current_a_total + delta_a_half;
-                tail.set(current_x_start_pos, current_a_total, x_osc_volta, target_a_volta);
-                stairs.emit(&mut seg, current_x_start_pos, current_a_total, x_osc_volta, target_a_volta);
+                tail.set(
+                    current_x_start_pos,
+                    current_a_total,
+                    x_osc_volta,
+                    target_a_volta,
+                );
+                stairs.emit(
+                    &mut seg,
+                    current_x_start_pos,
+                    current_a_total,
+                    x_osc_volta,
+                    target_a_volta,
+                );
                 current_a_total = target_a_volta;
                 current_x_start_pos = x_osc_volta;
             }
@@ -648,7 +696,12 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
                 f1(g.feed_x * 0.6),
                 f3(current_x_end_pos_final_volta)
             ));
-            tail.set(back_mid, current_a_total, current_x_end_pos_final_volta, current_a_total);
+            tail.set(
+                back_mid,
+                current_a_total,
+                current_x_end_pos_final_volta,
+                current_a_total,
+            );
         }
     }
 

@@ -68,9 +68,7 @@ impl ProfilesState {
     /// Converte os campos; `Err` com o rótulo do primeiro inválido
     /// (limites precisam ser > 0).
     pub fn parse_limits(&self) -> Result<MachineLimits, &'static str> {
-        let field = |s: &str, label: &'static str| {
-            parse_num(s).filter(|v| *v > 0.0).ok_or(label)
-        };
+        let field = |s: &str, label: &'static str| parse_num(s).filter(|v| *v > 0.0).ok_or(label);
         Ok(MachineLimits {
             max_rpm_chuck: field(&self.rpm, "Rotação Máx (RPM)")?,
             max_length_x: field(&self.length_x, "Curso X Máx (mm)")?,
@@ -213,7 +211,8 @@ pub fn show(app: &mut TfmApp, state: &mut ProfilesState, ctx: &egui::Context, op
             if state.confirm_delete {
                 ui.group(|ui| {
                     ui.label(
-                        RichText::new(format!("Excluir perfil '{}'?", state.selected)).color(danger),
+                        RichText::new(format!("Excluir perfil '{}'?", state.selected))
+                            .color(danger),
                     );
                     ui.horizontal(|ui| {
                         if ui.button("Sim, excluir").clicked() {

@@ -671,12 +671,14 @@ mod tests {
         let cfg = cfg();
         let state = UiState::from_params(&Params::default());
         let got = state.to_params(&cfg);
-        let mut expected = Params::default();
-        expected.powder_factor = got.powder_factor;
-        expected.powder_cost_brl_kg = got.powder_cost_brl_kg;
-        expected.powder_name = got.powder_name.clone();
-        expected.taxa_de_deposicao = got.taxa_de_deposicao;
-        expected.velocidade_a_mm_min = got.velocidade_a_mm_min;
+        let expected = Params {
+            powder_factor: got.powder_factor,
+            powder_cost_brl_kg: got.powder_cost_brl_kg,
+            powder_name: got.powder_name.clone(),
+            taxa_de_deposicao: got.taxa_de_deposicao,
+            velocidade_a_mm_min: got.velocidade_a_mm_min,
+            ..Params::default()
+        };
         assert_eq!(got, expected);
         assert_eq!(got.powder_name, "Pó padrão");
         assert_eq!(got.powder_factor, 0.16);
@@ -868,8 +870,10 @@ mod tests {
             density_factor_g_mm2: 0.2,
             cost_brl_kg: 900.0,
         });
-        let mut s = UiState::default();
-        s.powder_name = "Stellite 6".to_string();
+        let mut s = UiState {
+            powder_name: "Stellite 6".to_string(),
+            ..UiState::default()
+        };
         let p = s.to_params(&cfg);
         assert_eq!(p.powder_factor, 0.2);
         assert_eq!(p.powder_cost_brl_kg, 900.0);
@@ -889,16 +893,18 @@ mod tests {
     #[test]
     fn enums_and_texts_round_trip() {
         let cfg = cfg();
-        let mut p = Params::default();
-        p.direcao_soldagem = Direction::DireitaEsquerda;
-        p.sentido_rotacao = Rotation::Antihoraria;
-        p.flat_orientation = FlatOrientation::Y;
-        p.multiperfil_strategy = MultiperfilStrategy::PercursoContinuo;
-        p.multiperfil_profile_shape = ProfileShape::Trapezoidal;
-        p.bolacha_tipo = BolachaTipo::Aneis;
-        p.traceability_operator = "Ana".to_string();
-        p.notes = "duas\nlinhas".to_string();
-        p.ordem_servico = "OS-1".to_string();
+        let mut p = Params {
+            direcao_soldagem: Direction::DireitaEsquerda,
+            sentido_rotacao: Rotation::Antihoraria,
+            flat_orientation: FlatOrientation::Y,
+            multiperfil_strategy: MultiperfilStrategy::PercursoContinuo,
+            multiperfil_profile_shape: ProfileShape::Trapezoidal,
+            bolacha_tipo: BolachaTipo::Aneis,
+            traceability_operator: "Ana".to_string(),
+            notes: "duas\nlinhas".to_string(),
+            ordem_servico: "OS-1".to_string(),
+            ..Params::default()
+        };
         p.apply_operation(Operation::OscilacaoQuadradaContinua);
         let s = UiState::from_params(&p);
         assert_eq!(s.operation, Operation::OscilacaoQuadradaContinua);

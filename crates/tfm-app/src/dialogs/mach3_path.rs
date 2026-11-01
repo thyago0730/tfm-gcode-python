@@ -281,7 +281,8 @@ fn pick_exe(cfg: &Integration) -> Option<String> {
 }
 
 fn pick_dir(current: &str) -> Option<String> {
-    let mut dlg = rfd::FileDialog::new().set_title("Pasta onde o G-code (.tap) é salvo para o Mach3");
+    let mut dlg =
+        rfd::FileDialog::new().set_title("Pasta onde o G-code (.tap) é salvo para o Mach3");
     if Path::new(current).is_dir() {
         dlg = dlg.set_directory(current);
     }
@@ -476,7 +477,10 @@ mod tests {
             mach3_profile: String::new(),
             ..Integration::default()
         };
-        assert_eq!(mach3_dir(&empty), PathBuf::from(format!("C:{BACKSLASH}Mach3")));
+        assert_eq!(
+            mach3_dir(&empty),
+            PathBuf::from(format!("C:{BACKSLASH}Mach3"))
+        );
         assert_eq!(target_profiles(&empty), ["PTA", "Mach3Mill"]);
         let mill = Integration {
             mach3_profile: "Mach3Mill".to_string(),

@@ -115,9 +115,15 @@ struct OperatorFile {
     code: String,
     #[serde(deserialize_with = "lenient_string")]
     qualification_id: String,
-    #[serde(deserialize_with = "lenient_string", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        deserialize_with = "lenient_string",
+        skip_serializing_if = "String::is_empty"
+    )]
     qualification_validity: String,
-    #[serde(deserialize_with = "lenient_string", skip_serializing_if = "String::is_empty")]
+    #[serde(
+        deserialize_with = "lenient_string",
+        skip_serializing_if = "String::is_empty"
+    )]
     validity: String,
 }
 
@@ -171,7 +177,10 @@ pub struct Wps {
     #[serde(deserialize_with = "lenient_object")]
     pub params: IndexMap<String, Value>,
     /// Faixas por nome de parâmetro de [`Params`]; só gravado se não vazio.
-    #[serde(deserialize_with = "lenient_limits", skip_serializing_if = "IndexMap::is_empty")]
+    #[serde(
+        deserialize_with = "lenient_limits",
+        skip_serializing_if = "IndexMap::is_empty"
+    )]
     pub limits: IndexMap<String, Limit>,
 }
 
@@ -490,7 +499,13 @@ impl QualityManager {
 
     /// `add_operator`: atualiza os campos **não vazios** de um operador
     /// existente ou cadastra um novo; grava o arquivo.
-    pub fn add_operator(&mut self, name: &str, code: &str, qualification_id: &str, qualification_validity: &str) {
+    pub fn add_operator(
+        &mut self,
+        name: &str,
+        code: &str,
+        qualification_id: &str,
+        qualification_validity: &str,
+    ) {
         match self.operators.iter_mut().find(|op| op.name == name) {
             Some(op) => {
                 if !code.is_empty() {
@@ -515,7 +530,12 @@ impl QualityManager {
 
     /// `upsert_operator`: sobrescreve `qualification_id` (mesmo vazio) e a
     /// validade se informada; cadastra se não existe; grava o arquivo.
-    pub fn upsert_operator(&mut self, name: &str, qualification_id: &str, qualification_validity: &str) {
+    pub fn upsert_operator(
+        &mut self,
+        name: &str,
+        qualification_id: &str,
+        qualification_validity: &str,
+    ) {
         match self.operators.iter_mut().find(|op| op.name == name) {
             Some(op) => {
                 op.qualification_id = qualification_id.to_string();
@@ -547,7 +567,11 @@ impl QualityManager {
     /// Bloqueia só quando o operador existe, tem validade no formato
     /// `AAAA-MM-DD` e ela é anterior a `today`. Nome vazio, operador
     /// desconhecido, validade vazia ou ilegível não bloqueiam.
-    pub fn check_operator_qualification_on(&self, name: &str, today: NaiveDate) -> Result<(), String> {
+    pub fn check_operator_qualification_on(
+        &self,
+        name: &str,
+        today: NaiveDate,
+    ) -> Result<(), String> {
         if name.is_empty() {
             return Ok(());
         }
@@ -630,8 +654,12 @@ impl QualityManager {
 
         let values = serde_json::to_value(p).unwrap_or(Value::Null);
         for (param, limit) in &wps.limits {
-            let Some(raw) = values.get(param) else { continue };
-            let Some(f_val) = py_float_of(raw) else { continue };
+            let Some(raw) = values.get(param) else {
+                continue;
+            };
+            let Some(f_val) = py_float_of(raw) else {
+                continue;
+            };
             if f_val < limit.min || f_val > limit.max {
                 return Err(format!(
                     "BLOQUEIO ISO 3834: Parâmetro '{param}' ({}) fora da faixa da EPS ({} - {}).",
@@ -695,7 +723,14 @@ impl QualityManager {
     }
 
     /// `add_material`: cadastra/substitui e grava `materials.json`.
-    pub fn add_material(&mut self, name: &str, density: f64, cost_per_kg: f64, hardness_hrc: f64, description: &str) {
+    pub fn add_material(
+        &mut self,
+        name: &str,
+        density: f64,
+        cost_per_kg: f64,
+        hardness_hrc: f64,
+        description: &str,
+    ) {
         self.materials.insert(
             name.to_string(),
             Material::new(density, cost_per_kg, hardness_hrc, description),

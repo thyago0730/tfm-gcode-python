@@ -32,9 +32,11 @@ pub fn show(app: &mut TfmApp, ctx: &egui::Context, open: &mut bool) {
                 ui.label(RichText::new(rights).color(muted));
                 ui.add_space(6.0);
                 ui.label(
-                    RichText::new("Cladding & Hardfacing — revestimento PTA com rastreabilidade ISO 3834.")
-                        .small()
-                        .color(muted),
+                    RichText::new(
+                        "Cladding & Hardfacing — revestimento PTA com rastreabilidade ISO 3834.",
+                    )
+                    .small()
+                    .color(muted),
                 );
             });
             dialogs::footer(ui, |ui| {
@@ -56,7 +58,10 @@ mod tests {
     fn texto_do_sobre() {
         let [t, c, r] = about_lines();
         assert_eq!(t, "TFM G-Code Generator v2.0.0");
-        assert_eq!(c, "Desenvolvido para TFM Usinagem & Manutenção Industrial LTDA.");
+        assert_eq!(
+            c,
+            "Desenvolvido para TFM Usinagem & Manutenção Industrial LTDA."
+        );
         assert_eq!(r, "Todos os direitos reservados.");
     }
 }

@@ -102,10 +102,7 @@ impl WpsEditor {
         let rows = keys
             .into_iter()
             .map(|key| {
-                let (min, max) = wps
-                    .limits
-                    .get(&key)
-                    .map_or((0.0, 0.0), |l| (l.min, l.max));
+                let (min, max) = wps.limits.get(&key).map_or((0.0, 0.0), |l| (l.min, l.max));
                 LimitRow {
                     key,
                     min: fmt_num(min),
@@ -131,8 +128,10 @@ impl WpsEditor {
         }
         let mut limits = IndexMap::new();
         for row in &self.rows {
-            let min = parse_num(&row.min).ok_or_else(|| format!("Mínimo inválido em '{}'.", row.key))?;
-            let max = parse_num(&row.max).ok_or_else(|| format!("Máximo inválido em '{}'.", row.key))?;
+            let min =
+                parse_num(&row.min).ok_or_else(|| format!("Mínimo inválido em '{}'.", row.key))?;
+            let max =
+                parse_num(&row.max).ok_or_else(|| format!("Máximo inválido em '{}'.", row.key))?;
             if max <= 0.0 {
                 continue;
             }
@@ -465,7 +464,10 @@ fn save_editor(app: &mut TfmApp, state: &mut WpsState) {
         .enumerate()
         .any(|(j, w)| j != editor.index && w.name == name);
     if duplicate {
-        app.notify(NotifyKind::Aviso, format!("Já existe uma EPS chamada '{name}'."));
+        app.notify(
+            NotifyKind::Aviso,
+            format!("Já existe uma EPS chamada '{name}'."),
+        );
         return;
     }
     let Some(wps) = app.quality.wps.get_mut(editor.index) else {
@@ -515,7 +517,8 @@ mod tests {
             name: "EPS-1".into(),
             ..Wps::default()
         };
-        wps.limits.insert("zeta".into(), Limit { min: 1.0, max: 2.0 });
+        wps.limits
+            .insert("zeta".into(), Limit { min: 1.0, max: 2.0 });
         let ed = WpsEditor::from_wps(0, &wps);
         let keys: Vec<&str> = ed.rows.iter().map(|r| r.key.as_str()).collect();
         assert_eq!(keys.len(), CRITICAL_KEYS.len() + 1);

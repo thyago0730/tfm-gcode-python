@@ -116,7 +116,10 @@ fn sanitize_enums(obj: &mut Map<String, Value>) {
     sanitize::<Rotation>(
         obj,
         "sentido_rotacao",
-        &[("Horária (CW)", "horaria"), ("Anti-horária (CCW)", "antihoraria")],
+        &[
+            ("Horária (CW)", "horaria"),
+            ("Anti-horária (CCW)", "antihoraria"),
+        ],
     );
     sanitize::<WeldingMode>(obj, "welding_mode", &[]);
     sanitize::<OscillationType>(
@@ -137,7 +140,11 @@ fn sanitize_enums(obj: &mut Map<String, Value>) {
 /// Mantém `key` se o valor já é aceito pelo enum `T`; senão tenta o texto
 /// aparado, em minúsculas e os `aliases` de display (sem distinguir
 /// maiúsculas); sem correspondência, remove a chave para valer o default.
-fn sanitize<T: DeserializeOwned>(obj: &mut Map<String, Value>, key: &str, aliases: &[(&str, &str)]) {
+fn sanitize<T: DeserializeOwned>(
+    obj: &mut Map<String, Value>,
+    key: &str,
+    aliases: &[(&str, &str)],
+) {
     let Some(current) = obj.get(key) else { return };
     if accepts::<T>(current) {
         return;

@@ -67,9 +67,7 @@ pub fn parse_expressions(text: &str) -> Result<(IndexMap<String, String>, Option
         match root.get("expressions") {
             Some(Value::Object(exprs)) => (exprs.clone(), notes),
             _ => {
-                return Err(
-                    "A chave 'expressions' deve conter um objeto de expressões.".to_string(),
-                )
+                return Err("A chave 'expressions' deve conter um objeto de expressões.".to_string())
             }
         }
     } else {
@@ -107,10 +105,7 @@ pub fn format_expressions(exprs: &IndexMap<String, String>) -> String {
 pub fn insert_at_char(text: &mut String, at: Option<usize>, snippet: &str) -> usize {
     let n_chars = text.chars().count();
     let at = at.map_or(n_chars, |i| i.min(n_chars));
-    let byte = text
-        .char_indices()
-        .nth(at)
-        .map_or(text.len(), |(b, _)| b);
+    let byte = text.char_indices().nth(at).map_or(text.len(), |(b, _)| b);
     text.insert_str(byte, snippet);
     at + snippet.chars().count()
 }
@@ -151,7 +146,10 @@ impl FormulasState {
     pub fn validate(&mut self) -> Option<IndexMap<String, String>> {
         match parse_expressions(&self.text) {
             Ok((exprs, _)) => {
-                self.set_status(true, format!("JSON válido: {} expressão(ões).", exprs.len()));
+                self.set_status(
+                    true,
+                    format!("JSON válido: {} expressão(ões).", exprs.len()),
+                );
                 Some(exprs)
             }
             Err(err) => {
@@ -175,7 +173,10 @@ impl FormulasState {
         self.text = format_expressions(&defaults.expressions);
         self.notes = defaults.notes;
         self.results.clear();
-        self.set_status(true, "Fórmulas padrão restauradas (clique em Salvar para gravar).");
+        self.set_status(
+            true,
+            "Fórmulas padrão restauradas (clique em Salvar para gravar).",
+        );
     }
 
     /// "Avaliar": calcula todas as chaves com os parâmetros atuais.
@@ -218,7 +219,10 @@ fn import(state: &mut FormulasState) {
             state.results.clear();
             state.set_status(
                 true,
-                format!("Fórmulas importadas de {} (clique em Salvar para gravar).", path.display()),
+                format!(
+                    "Fórmulas importadas de {} (clique em Salvar para gravar).",
+                    path.display()
+                ),
             );
         }
         Err(err) => state.set_status(false, format!("Falha ao importar: {err}")),
@@ -381,7 +385,8 @@ pub fn show(app: &mut TfmApp, state: &mut FormulasState, ctx: &egui::Context, op
                                     ui.end_row();
                                     for (key, value) in &state.results {
                                         ui.label(RichText::new(key).monospace());
-                                        let mut text = RichText::new(format_value(*value)).monospace();
+                                        let mut text =
+                                            RichText::new(format_value(*value)).monospace();
                                         if value.is_none() {
                                             text = text.color(danger).strong();
                                         }
@@ -458,7 +463,9 @@ mod tests {
     fn rejeita_estruturas_invalidas() {
         assert!(parse_expressions("[1, 2]").is_err_and(|e| e.contains("objeto JSON na raiz")));
         assert!(parse_expressions(r#"{"a": 1}"#).is_err_and(|e| e.contains("Valores inválidos")));
-        assert!(parse_expressions(r#"{"expressions": 3}"#).is_err_and(|e| e.contains("expressions")));
+        assert!(
+            parse_expressions(r#"{"expressions": 3}"#).is_err_and(|e| e.contains("expressions"))
+        );
         assert!(parse_expressions(r#"{"": "1"}"#).is_err_and(|e| e.contains("Chaves inválidas")));
         let err = parse_expressions("{\n  \"a\": \"1\",\n}").expect_err("vírgula sobrando");
         assert!(err.starts_with("Erro de JSON: linha "), "{err}");

@@ -16,8 +16,8 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 
 use egui::epaint::{Mesh, TextShape};
 use egui::{
-    pos2, vec2, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, Pos2, Rect,
-    RichText, Sense, Shape, Stroke, StrokeKind, Ui, Vec2,
+    pos2, vec2, Align, Align2, Color32, CornerRadius, FontId, Layout, Margin, Pos2, Rect, RichText,
+    Sense, Shape, Stroke, StrokeKind, Ui, Vec2,
 };
 use egui_plot::{Bar, BarChart, Corner, Legend, Line, LineStyle, Plot, PlotPoint, Text};
 use tfm_core::estimates::{CostSummary, Estimates};
@@ -210,9 +210,7 @@ pub fn cost_parts(costs: &CostSummary) -> [Option<f64>; 4] {
 /// zero as partes presentes ficam em 0 %.
 pub fn percentages(parts: &[Option<f64>; 4]) -> (f64, [Option<f64>; 4]) {
     let total: f64 = parts.iter().flatten().sum();
-    let pct = parts.map(|p| {
-        p.map(|v| if total > 0.0 { v / total * 100.0 } else { 0.0 })
-    });
+    let pct = parts.map(|p| p.map(|v| if total > 0.0 { v / total * 100.0 } else { 0.0 }));
     (total, pct)
 }
 
@@ -252,7 +250,14 @@ fn badge(ui: &mut Ui, text: &str, palette: &Palette) {
 
 /// Gráfico sem dados (`_set_empty_plot`): título, eixos nomeados e
 /// "Sem dados" no centro.
-fn empty_plot(ui: &mut Ui, id: &str, title: &str, x_label: &str, y_label: &str, height: Option<f32>) {
+fn empty_plot(
+    ui: &mut Ui,
+    id: &str,
+    title: &str,
+    x_label: &str,
+    y_label: &str,
+    height: Option<f32>,
+) {
     heading(ui, title);
     let weak = ui.visuals().weak_text_color();
     let mut plot = Plot::new(id)
@@ -271,9 +276,7 @@ fn empty_plot(ui: &mut Ui, id: &str, title: &str, x_label: &str, y_label: &str, 
     }
     plot.show(ui, |plot_ui| {
         let text = RichText::new("Sem dados").size(14.0).color(weak);
-        plot_ui.text(
-            Text::new("", PlotPoint::new(0.5, 0.5), text).anchor(Align2::CENTER_CENTER),
-        );
+        plot_ui.text(Text::new("", PlotPoint::new(0.5, 0.5), text).anchor(Align2::CENTER_CENTER));
     });
 }
 
@@ -328,7 +331,11 @@ pub fn oscillation(ui: &mut Ui, osc: &[f64], palette: &Palette) {
     ui.horizontal(|ui| {
         heading(ui, "Padrão de Oscilação (Eixo X)");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            badge(ui, &format!("Amplitude Aprox: {:.2} mm", amplitude(osc)), palette);
+            badge(
+                ui,
+                &format!("Amplitude Aprox: {:.2} mm", amplitude(osc)),
+                palette,
+            );
         });
     });
     Plot::new("chart_osc")
@@ -336,7 +343,11 @@ pub fn oscillation(ui: &mut Ui, osc: &[f64], palette: &Palette) {
         .x_axis_label("Passo")
         .y_axis_label("Posição X (mm)")
         .show(ui, |plot_ui| {
-            plot_ui.line(Line::new("Posição X", points).color(palette.accent).width(1.2));
+            plot_ui.line(
+                Line::new("Posição X", points)
+                    .color(palette.accent)
+                    .width(1.2),
+            );
         });
 }
 
@@ -355,7 +366,14 @@ pub fn statistics(ui: &mut Ui, dists: &[f64], palette: &Palette) {
             "Distância",
             Some(plot_h),
         );
-        empty_plot(ui, "chart_hist", "Histograma", "Distância", "Contagem", Some(plot_h));
+        empty_plot(
+            ui,
+            "chart_hist",
+            "Histograma",
+            "Distância",
+            "Contagem",
+            Some(plot_h),
+        );
         return;
     }
 
@@ -369,7 +387,11 @@ pub fn statistics(ui: &mut Ui, dists: &[f64], palette: &Palette) {
         .y_axis_label("Distância do Passo (mm)")
         .height(plot_h)
         .show(ui, |plot_ui| {
-            plot_ui.line(Line::new("Passo Individual", per_step).color(faded).width(1.2));
+            plot_ui.line(
+                Line::new("Passo Individual", per_step)
+                    .color(faded)
+                    .width(1.2),
+            );
             plot_ui.line(
                 Line::new("Acumulado (normalizado)", cumulative_norm)
                     .color(palette.warning)
@@ -456,11 +478,23 @@ pub fn process_dashboard(ui: &mut Ui, est: &Estimates, params: &Params, palette:
         Rect::from_min_size(min, vec2(cell_w, cell_h))
     };
 
-    let (p, area) = card(&painter, cell(0.0, 0.0), "Composicao de Custos", palette, ink);
+    let (p, area) = card(
+        &painter,
+        cell(0.0, 0.0),
+        "Composicao de Custos",
+        palette,
+        ink,
+    );
     draw_cost_donut(&p, area, est, palette, ink);
     let (p, area) = card(&painter, cell(1.0, 0.0), "Consumo Estimado", palette, ink);
     draw_consumption_bars(&p, area, est, palette, ink);
-    let (p, area) = card(&painter, cell(0.0, 1.0), "Faixas e Sobreposicao", palette, ink);
+    let (p, area) = card(
+        &painter,
+        cell(0.0, 1.0),
+        "Faixas e Sobreposicao",
+        palette,
+        ink,
+    );
     draw_schematic(&p, area, params, est.dilution_pct, palette, ink);
     let (p, area) = card(&painter, cell(1.0, 1.0), "Tempo Estimado", palette, ink);
     draw_time_card(&p, area, est.time_hours, palette, ink);
@@ -525,14 +559,23 @@ fn add_ring_segment(
     painter.add(Shape::mesh(mesh));
     let (s, c) = start.sin_cos();
     painter.line_segment(
-        [center + vec2(c * r_in, s * r_in), center + vec2(c * r_out, s * r_out)],
+        [
+            center + vec2(c * r_in, s * r_in),
+            center + vec2(c * r_out, s * r_out),
+        ],
         Stroke::new(1.5, edge),
     );
 }
 
 /// Rosca Pó/Gás/Mão de Obra/Máquina com o total no centro e a legenda em %
 /// (duas colunas) abaixo. Sem custo: "Sem dados de custo".
-fn draw_cost_donut(painter: &egui::Painter, area: Rect, est: &Estimates, palette: &Palette, ink: Ink) {
+fn draw_cost_donut(
+    painter: &egui::Painter,
+    area: Rect,
+    est: &Estimates,
+    palette: &Palette,
+    ink: Ink,
+) {
     let parts = cost_parts(&est.costs);
     let (total, pct) = percentages(&parts);
     if total <= 0.0 {
@@ -562,10 +605,23 @@ fn draw_cost_donut(painter: &egui::Painter, area: Rect, est: &Estimates, palette
                 continue;
             }
             let sweep = (value / total) as f32 * TAU;
-            add_ring_segment(painter, center, inner, radius, start, -sweep, COST_COLORS[i], palette.card_bg);
+            add_ring_segment(
+                painter,
+                center,
+                inner,
+                radius,
+                start,
+                -sweep,
+                COST_COLORS[i],
+                palette.card_bg,
+            );
             start -= sweep;
         }
-        let symbol = if est.costs.currency.is_empty() { "R$" } else { est.costs.currency.as_str() };
+        let symbol = if est.costs.currency.is_empty() {
+            "R$"
+        } else {
+            est.costs.currency.as_str()
+        };
         painter.text(
             center - vec2(0.0, radius * 0.13),
             Align2::CENTER_CENTER,
@@ -591,14 +647,29 @@ fn draw_cost_donut(painter: &egui::Painter, area: Rect, est: &Estimates, palette
         painter.rect_filled(swatch, CornerRadius::same(2), COST_COLORS[i]);
         let suffix = if pct[i].is_some() { "%" } else { "" };
         let text = format!("{label}  {}{suffix}", fmt_opt(pct[i], 1));
-        painter.text(pos2(x + 16.0, y), Align2::LEFT_CENTER, text, FontId::proportional(11.0), ink.text);
+        painter.text(
+            pos2(x + 16.0, y),
+            Align2::LEFT_CENTER,
+            text,
+            FontId::proportional(11.0),
+            ink.text,
+        );
     }
 }
 
 /// Barras horizontais "Pó (kg)" e "Gás (m³)" com o valor (`{:.3}`) ao lado;
 /// a primeira categoria fica embaixo, como no `barh` do matplotlib.
-fn draw_consumption_bars(painter: &egui::Painter, area: Rect, est: &Estimates, palette: &Palette, ink: Ink) {
-    let values = [finite_or_none(est.costs.powder_kg), finite_or_none(est.costs.gas_m3)];
+fn draw_consumption_bars(
+    painter: &egui::Painter,
+    area: Rect,
+    est: &Estimates,
+    palette: &Palette,
+    ink: Ink,
+) {
+    let values = [
+        finite_or_none(est.costs.powder_kg),
+        finite_or_none(est.costs.gas_m3),
+    ];
     let categories = ["Pó (kg)", "Gás (m³)"];
     let max = values.iter().flatten().copied().fold(1e-6, f64::max);
     let x_lim = max * 1.35;
@@ -649,7 +720,13 @@ fn draw_consumption_bars(painter: &egui::Painter, area: Rect, est: &Estimates, p
 
 /// Cartão "Tempo Estimado": `HHh MMm` grande, "Tempo total previsto", barra e
 /// `{:.2} h`; sem tempo mostra "--:--".
-fn draw_time_card(painter: &egui::Painter, area: Rect, time_hours: f64, palette: &Palette, ink: Ink) {
+fn draw_time_card(
+    painter: &egui::Painter,
+    area: Rect,
+    time_hours: f64,
+    palette: &Palette,
+    ink: Ink,
+) {
     let Some(label) = hours_label(time_hours) else {
         painter.text(
             area.center(),
@@ -664,7 +741,13 @@ fn draw_time_card(painter: &egui::Painter, area: Rect, time_hours: f64, palette:
     let x1 = area.min.x + area.width() * 0.92;
     // Frações medidas de baixo para cima, como `transAxes`.
     let y = |f: f32| area.max.y - area.height() * f;
-    painter.text(pos2(x0, y(0.67)), Align2::LEFT_CENTER, label, FontId::proportional(26.0), TIME_COLOR);
+    painter.text(
+        pos2(x0, y(0.67)),
+        Align2::LEFT_CENTER,
+        label,
+        FontId::proportional(26.0),
+        TIME_COLOR,
+    );
     painter.text(
         pos2(x0, y(0.47)),
         Align2::LEFT_CENTER,
@@ -748,7 +831,11 @@ pub fn schematic_geometry(params: &Params, dilution_pct: f64) -> Option<Schemati
         spacing = pitch;
     } else if bead_width > 0.0 {
         let calib = params.bead_width_calibration_factor;
-        let calib = if calib.is_finite() && calib > 0.0 { calib } else { 1.0 };
+        let calib = if calib.is_finite() && calib > 0.0 {
+            calib
+        } else {
+            1.0
+        };
         let metrics = overlap::compute_overlap_metrics(
             bead_width,
             overlap_pct,
@@ -829,7 +916,11 @@ pub fn clad_profile(geo: &Schematic, samples: usize) -> Vec<ProfileSample> {
     let centers = geo.bead_starts.map(|s| s + geo.bead_body_width / 2.0);
     (0..samples)
         .map(|i| {
-            let t = if samples > 1 { i as f64 / (samples - 1) as f64 } else { 0.0 };
+            let t = if samples > 1 {
+                i as f64 / (samples - 1) as f64
+            } else {
+                0.0
+            };
             let x = geo.display_length * t;
             let mut top = 0.0;
             let mut bottom = 0.0;
@@ -844,7 +935,12 @@ pub fn clad_profile(geo: &Schematic, samples: usize) -> Vec<ProfileSample> {
                     bottom = f64::max(bottom, penetration * pen);
                 }
             }
-            ProfileSample { x, top, bottom, overlaps }
+            ProfileSample {
+                x,
+                top,
+                bottom,
+                overlaps,
+            }
         })
         .collect()
 }
@@ -862,7 +958,13 @@ impl Frame2d {
     fn new(rect: Rect, x0: f64, x1: f64, y0: f64, y1: f64) -> Self {
         let x1 = if x1 > x0 { x1 } else { x0 + 1.0 };
         let y1 = if y1 > y0 { y1 } else { y0 + 1.0 };
-        Frame2d { rect, x0, x1, y0, y1 }
+        Frame2d {
+            rect,
+            x0,
+            x1,
+            y0,
+            y1,
+        }
     }
 
     fn at(&self, x: f64, y: f64) -> Pos2 {
@@ -935,7 +1037,13 @@ fn dimension(
     painter.line_segment([frame.at(x0, y - tick), frame.at(x0, y + tick)], stroke);
     painter.line_segment([frame.at(x1, y - tick), frame.at(x1, y + tick)], stroke);
     let mid = frame.at((x0 + x1) / 2.0, y + tick * 0.6);
-    painter.text(mid, Align2::CENTER_BOTTOM, label, FontId::proportional(9.5), ink.text);
+    painter.text(
+        mid,
+        Align2::CENTER_BOTTOM,
+        label,
+        FontId::proportional(9.5),
+        ink.text,
+    );
 }
 
 /// Comprimento fixo, em px, da ponta das setas dos eixos do esquema. O
@@ -943,7 +1051,10 @@ fn dimension(
 /// aqui atravessaria o desenho; o Python usa uma ponta `->` pequena e fixa.
 pub const ARROW_HEAD_PX: f32 = 7.0;
 // Garantia em tempo de compilação: a ponta nunca volta a crescer.
-const _: () = assert!(ARROW_HEAD_PX <= 8.0, "ponta da seta do esquema deve ter no máximo 8 px");
+const _: () = assert!(
+    ARROW_HEAD_PX <= 8.0,
+    "ponta da seta do esquema deve ter no máximo 8 px"
+);
 
 /// Abertura de cada farpa da seta em relação ao eixo (a mesma do egui).
 const ARROW_BARB_DEG: f32 = 36.0;
@@ -1017,7 +1128,13 @@ fn draw_schematic(
             FontId::proportional(10.5),
             ink.weak,
         );
-        rotated_text(painter, pos2(area.min.x + 7.0, area.center().y), "Altura", 10.5, ink.weak);
+        rotated_text(
+            painter,
+            pos2(area.min.x + 7.0, area.center().y),
+            "Altura",
+            10.5,
+            ink.weak,
+        );
         return;
     };
     if area.width() < 40.0 || area.height() < 40.0 {
@@ -1040,7 +1157,12 @@ fn draw_schematic(
 
     // Eixos com seta de ponta fixa (comprimento e altura).
     let axis = Stroke::new(1.4, ink.text);
-    axis_arrow(painter, frame.at(-geo.margin_x * 0.10, 0.0), frame.at(x_max, 0.0), axis);
+    axis_arrow(
+        painter,
+        frame.at(-geo.margin_x * 0.10, 0.0),
+        frame.at(x_max, 0.0),
+        axis,
+    );
     axis_arrow(
         painter,
         frame.at(-geo.margin_x * 0.02, 0.0),
@@ -1050,7 +1172,14 @@ fn draw_schematic(
 
     // Penetração (diluição) abaixo da base.
     let dilution = with_alpha(DILUTION_COLOR, 0.42);
-    fill_band(painter, &frame, &prof, |s| (-s.bottom, 0.0), |s| s.bottom > 1e-6, dilution);
+    fill_band(
+        painter,
+        &frame,
+        &prof,
+        |s| (-s.bottom, 0.0),
+        |s| s.bottom > 1e-6,
+        dilution,
+    );
     // Camadas, da base ao topo, recortadas pelo perfil; a última sobe até a coroa.
     for k in 0..geo.num_layers {
         let lo = k as f64 * h;
@@ -1060,11 +1189,25 @@ fn draw_schematic(
             (k + 1) as f64 * h
         };
         let color = palette.layer_color(k);
-        fill_band(painter, &frame, &prof, move |s| (lo, s.top.min(hi)), |_| true, color);
+        fill_band(
+            painter,
+            &frame,
+            &prof,
+            move |s| (lo, s.top.min(hi)),
+            |_| true,
+            color,
+        );
     }
     // Zonas onde dois cordões se sobrepõem.
     let overlap = with_alpha(OVERLAP_COLOR, 0.96);
-    fill_band(painter, &frame, &prof, |s| (0.0, s.top), |s| s.overlaps >= 2, overlap);
+    fill_band(
+        painter,
+        &frame,
+        &prof,
+        |s| (0.0, s.top),
+        |s| s.overlaps >= 2,
+        overlap,
+    );
     // Contorno do revestimento.
     let outline: Vec<Pos2> = prof.iter().map(|s| frame.at(s.x, s.top)).collect();
     painter.add(Shape::line(outline, thin));
@@ -1094,7 +1237,9 @@ fn draw_schematic(
     let n = prof.len();
     for start in geo.bead_starts {
         let c = start + geo.bead_body_width / 2.0;
-        let idx = ((c / length) * (n - 1) as f64).round().clamp(0.0, (n - 1) as f64) as usize;
+        let idx = ((c / length) * (n - 1) as f64)
+            .round()
+            .clamp(0.0, (n - 1) as f64) as usize;
         let top = prof.get(idx).map_or(0.0, |s| s.top);
         let dashed = Shape::dashed_line(
             &[frame.at(c, 0.0), frame.at(c, top)],
@@ -1133,34 +1278,91 @@ fn draw_schematic(
     let c1 = geo.bead_starts[1] + geo.bead_body_width / 2.0;
     let pitch_y = top_y + (h * 0.10).max(0.14);
     let label = format!("Passo {:.2} mm", geo.spacing_mm);
-    dimension(painter, &frame, c0, c1, pitch_y, (h * 0.11).max(0.10), &label, ink);
+    dimension(
+        painter,
+        &frame,
+        c0,
+        c1,
+        pitch_y,
+        (h * 0.11).max(0.10),
+        &label,
+        ink,
+    );
     // Altura total, à esquerda, com o rótulo em pé.
     let hx = -geo.margin_x * 0.055;
     let htick = (length * 0.015).max(0.10);
     let stroke = Stroke::new(1.2, ink.text);
     painter.line_segment([frame.at(hx, 0.0), frame.at(hx, top_y)], stroke);
-    painter.line_segment([frame.at(hx - htick, 0.0), frame.at(hx + htick, 0.0)], stroke);
-    painter.line_segment([frame.at(hx - htick, top_y), frame.at(hx + htick, top_y)], stroke);
+    painter.line_segment(
+        [frame.at(hx - htick, 0.0), frame.at(hx + htick, 0.0)],
+        stroke,
+    );
+    painter.line_segment(
+        [frame.at(hx - htick, top_y), frame.at(hx + htick, top_y)],
+        stroke,
+    );
     let label_x = hx - (geo.margin_x * 0.08).max(0.22);
     let label = format!("{:.2} mm", geo.stack_height);
-    rotated_text(painter, frame.at(label_x, top_y / 2.0), &label, 9.5, ink.text);
+    rotated_text(
+        painter,
+        frame.at(label_x, top_y / 2.0),
+        &label,
+        9.5,
+        ink.text,
+    );
 
     // Rótulos dos eixos e das camadas.
     let bold = FontId::proportional(11.0);
     let small = FontId::proportional(9.5);
-    painter.text(frame.at(-geo.margin_x * 0.45, y_max * 0.90), Align2::LEFT_CENTER, "Altura", bold.clone(), ink.strong);
+    painter.text(
+        frame.at(-geo.margin_x * 0.45, y_max * 0.90),
+        Align2::LEFT_CENTER,
+        "Altura",
+        bold.clone(),
+        ink.strong,
+    );
     // Rótulo logo abaixo do eixo e legenda numa linha própria mais abaixo
     // (em px), para um não cobrir o outro.
     let axis_px = frame.at(0.0, 0.0).y;
     let axis_label = pos2(frame.at(length * 0.70, 0.0).x, axis_px + 4.0);
-    painter.text(axis_label, Align2::LEFT_TOP, "Comprimento (mm)", bold, ink.strong);
-    painter.text(frame.at(-geo.margin_x * 0.74, top_y * 0.5), Align2::LEFT_CENTER, "camadas", small.clone(), ink.weak);
-    painter.text(frame.at(-geo.margin_x * 0.12, 0.0), Align2::RIGHT_CENTER, "0", small.clone(), ink.weak);
+    painter.text(
+        axis_label,
+        Align2::LEFT_TOP,
+        "Comprimento (mm)",
+        bold,
+        ink.strong,
+    );
+    painter.text(
+        frame.at(-geo.margin_x * 0.74, top_y * 0.5),
+        Align2::LEFT_CENTER,
+        "camadas",
+        small.clone(),
+        ink.weak,
+    );
+    painter.text(
+        frame.at(-geo.margin_x * 0.12, 0.0),
+        Align2::RIGHT_CENTER,
+        "0",
+        small.clone(),
+        ink.weak,
+    );
     let layers = geo.num_layers.to_string();
-    painter.text(frame.at(-geo.margin_x * 0.12, top_y), Align2::RIGHT_CENTER, layers, small.clone(), ink.text);
+    painter.text(
+        frame.at(-geo.margin_x * 0.12, top_y),
+        Align2::RIGHT_CENTER,
+        layers,
+        small.clone(),
+        ink.text,
+    );
     let tick = Stroke::new(0.9, ink.weak);
-    painter.line_segment([frame.at(-geo.margin_x * 0.05, top_y), frame.at(0.0, top_y)], tick);
-    painter.line_segment([frame.at(-geo.margin_x * 0.05, 0.0), frame.at(0.0, 0.0)], tick);
+    painter.line_segment(
+        [frame.at(-geo.margin_x * 0.05, top_y), frame.at(0.0, top_y)],
+        tick,
+    );
+    painter.line_segment(
+        [frame.at(-geo.margin_x * 0.05, 0.0), frame.at(0.0, 0.0)],
+        tick,
+    );
 
     // Legenda abaixo do eixo (em pixels): Solda / Sobreposicao / Diluicao.
     let legend_y = (axis_px + 28.0).min(area.max.y - 6.0);
@@ -1173,7 +1375,13 @@ fn draw_schematic(
     for (label, color) in items {
         let swatch = Rect::from_center_size(pos2(x + 6.0, legend_y), vec2(12.0, 7.0));
         painter.rect_filled(swatch, CornerRadius::ZERO, color);
-        let used = painter.text(pos2(x + 16.0, legend_y), Align2::LEFT_CENTER, label, small.clone(), ink.weak);
+        let used = painter.text(
+            pos2(x + 16.0, legend_y),
+            Align2::LEFT_CENTER,
+            label,
+            small.clone(),
+            ink.weak,
+        );
         x = used.max.x + 14.0;
     }
 }
@@ -1320,9 +1528,13 @@ mod tests {
     fn geometria_do_esquema_com_defaults() {
         let p = Params::default(); // 50 mm, h 1.5, cordão 8, sobreposição 40 %, 1 camada
         let geo = schematic_geometry(&p, 0.0).expect("defaults desenham");
-        let step = overlap::compute_overlap_metrics(8.0, 40.0, 1.5, None, None, false, 1.0)
-            .step_over_mm;
-        assert!((geo.spacing_mm - step).abs() < EPS, "passo {}", geo.spacing_mm);
+        let step =
+            overlap::compute_overlap_metrics(8.0, 40.0, 1.5, None, None, false, 1.0).step_over_mm;
+        assert!(
+            (geo.spacing_mm - step).abs() < EPS,
+            "passo {}",
+            geo.spacing_mm
+        );
         assert!(geo.spacing_mm > 0.0 && geo.spacing_mm < 8.0);
         assert!(geo.bead_body_width >= 8.0);
         assert_eq!(geo.bead_starts, [0.0, step, 2.0 * step]);
@@ -1390,7 +1602,10 @@ mod tests {
         let top_max = prof.iter().map(|s| s.top).fold(0.0, f64::max);
         assert!(top_max >= geo.stack_height - 1e-6, "coroa alcança a altura");
         assert!(prof.iter().all(|s| s.top >= 0.0 && s.bottom >= 0.0));
-        assert!(prof.iter().any(|s| s.overlaps >= 2), "há zona de sobreposição");
+        assert!(
+            prof.iter().any(|s| s.overlaps >= 2),
+            "há zona de sobreposição"
+        );
         assert!(prof.iter().any(|s| s.bottom > 0.0), "há penetração");
         assert!(clad_profile(&geo, 0).is_empty());
     }
@@ -1468,9 +1683,11 @@ mod tests {
             screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(40.0, 30.0))),
             ..Default::default()
         };
-        ctx.run_ui(tiny, |ui| process_dashboard(ui, &est, &layered, &Palette::dark()))
-            .textures_delta
-            .clear();
+        ctx.run_ui(tiny, |ui| {
+            process_dashboard(ui, &est, &layered, &Palette::dark())
+        })
+        .textures_delta
+        .clear();
     }
 
     #[test]
@@ -1479,7 +1696,10 @@ mod tests {
         let tip = pos2(400.0, 100.0);
         let [a, b] = arrow_barbs(pos2(0.0, 100.0), tip, ARROW_HEAD_PX);
         for barb in [a, b] {
-            assert!(((barb - tip).length() - ARROW_HEAD_PX).abs() < 1e-3, "{barb:?}");
+            assert!(
+                ((barb - tip).length() - ARROW_HEAD_PX).abs() < 1e-3,
+                "{barb:?}"
+            );
             assert!(barb.x < tip.x, "farpa atrás da ponta: {barb:?}");
         }
         // Farpas simétricas em relação ao eixo.
@@ -1540,7 +1760,9 @@ mod tests {
             screen_rect: Some(screen),
             ..Default::default()
         };
-        let mut out = ctx.run_ui(input.clone(), |ui| process_dashboard(ui, &est, &params, &palette));
+        let mut out = ctx.run_ui(input.clone(), |ui| {
+            process_dashboard(ui, &est, &params, &palette)
+        });
         out.textures_delta.clear();
         // Cada cartão pinta com um painter recortado ao seu retângulo: setas,
         // cotas e textos têm de caber nele (nada vaza para o vizinho).
@@ -1560,6 +1782,9 @@ mod tests {
                 "forma {bounds:?} vaza do cartão {clip:?}"
             );
         }
-        assert!(shapes_in_cards > 50, "poucas formas nos cartões: {shapes_in_cards}");
+        assert!(
+            shapes_in_cards > 50,
+            "poucas formas nos cartões: {shapes_in_cards}"
+        );
     }
 }

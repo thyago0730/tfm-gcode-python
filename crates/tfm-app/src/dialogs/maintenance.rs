@@ -60,9 +60,9 @@ pub fn usage_pct(current: f64, limit: f64) -> f64 {
 
 /// Limite de horas digitado: número >= 1 (o `minvalue=1.0` do Python).
 pub fn parse_limit(s: &str) -> Result<f64, String> {
-    parse_num(s)
-        .filter(|v| *v >= 1.0)
-        .ok_or_else(|| "Limite inválido: informe um número de horas maior ou igual a 1.".to_string())
+    parse_num(s).filter(|v| *v >= 1.0).ok_or_else(|| {
+        "Limite inválido: informe um número de horas maior ou igual a 1.".to_string()
+    })
 }
 
 /// Horas de limite como o Python mostrava: inteiro sem casas, senão uma casa.
@@ -107,7 +107,9 @@ pub fn show(app: &mut TfmApp, state: &mut MaintenanceState, ctx: &egui::Context,
                     .strong()
                     .size(15.0),
             );
-            ui.label(RichText::new(format!("Tempo Total Acumulado: {total_h:.1} horas")).color(accent));
+            ui.label(
+                RichText::new(format!("Tempo Total Acumulado: {total_h:.1} horas")).color(accent),
+            );
             for alert in app.quality.maintenance_alerts() {
                 ui.label(RichText::new(alert).color(colors.danger));
             }
@@ -162,7 +164,11 @@ pub fn show(app: &mut TfmApp, state: &mut MaintenanceState, ctx: &egui::Context,
                 app.quality.save_maintenance();
                 app.notify(
                     NotifyKind::Sucesso,
-                    format!("Limite de '{}' definido em {} h.", title_case(&name), fmt_hours(limit)),
+                    format!(
+                        "Limite de '{}' definido em {} h.",
+                        title_case(&name),
+                        fmt_hours(limit)
+                    ),
                 );
             }
         }
@@ -186,7 +192,10 @@ pub fn show(app: &mut TfmApp, state: &mut MaintenanceState, ctx: &egui::Context,
                 state.new_limit.clear();
                 app.notify(
                     NotifyKind::Sucesso,
-                    format!("Componente '{key}' monitorado com limite de {} h.", fmt_hours(limit)),
+                    format!(
+                        "Componente '{key}' monitorado com limite de {} h.",
+                        fmt_hours(limit)
+                    ),
                 );
             }
         }

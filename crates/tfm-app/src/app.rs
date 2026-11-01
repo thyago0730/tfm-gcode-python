@@ -487,9 +487,7 @@ impl TfmApp {
             ("Qualidade", "Matriz de Riscos (ISO 3834)...") => {
                 self.dialogs.open(DialogId::RiskMatrix)
             }
-            ("Qualidade", "Manutenção Preventiva...") => {
-                self.dialogs.open(DialogId::Maintenance)
-            }
+            ("Qualidade", "Manutenção Preventiva...") => self.dialogs.open(DialogId::Maintenance),
             ("Qualidade", "Abrir Pasta de Logs") => self.open_logs_dir(),
             ("Ajuda", "Tutorial") => self.dialogs.open(DialogId::Tutorial),
             ("Ajuda", "Atalhos") => self.dialogs.open(DialogId::Shortcuts),

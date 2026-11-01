@@ -51,9 +51,7 @@ impl CostsState {
     /// Converte os campos; `Err` com o rótulo do primeiro campo inválido.
     /// Custos negativos também são rejeitados.
     pub fn parse(&self) -> Result<CostValues, &'static str> {
-        let field = |s: &str, label: &'static str| {
-            parse_num(s).filter(|v| *v >= 0.0).ok_or(label)
-        };
+        let field = |s: &str, label: &'static str| parse_num(s).filter(|v| *v >= 0.0).ok_or(label);
         Ok(CostValues {
             powder: field(&self.powder, "Pó")?,
             gas: field(&self.gas, "Gás argônio")?,
@@ -77,7 +75,11 @@ pub fn apply(cfg: &mut AppConfig, values: CostValues, symbol: &str) -> Vec<Strin
     set("powder_brl_kg", &mut costs.powder_brl_kg, values.powder);
     set("gas_argon_brl_m3", &mut costs.gas_argon_brl_m3, values.gas);
     set("labor_brl_hour", &mut costs.labor_brl_hour, values.labor);
-    set("machine_brl_hour", &mut costs.machine_brl_hour, values.machine);
+    set(
+        "machine_brl_hour",
+        &mut costs.machine_brl_hour,
+        values.machine,
+    );
     if costs.currency_symbol != symbol {
         changes.push(format!(
             "currency_symbol: {} -> {symbol}",
@@ -167,7 +169,9 @@ pub fn show(app: &mut TfmApp, state: &mut CostsState, ctx: &egui::Context, open:
             }
             Err(label) => app.notify(
                 NotifyKind::Aviso,
-                format!("Por favor, verifique os parâmetros. Valor numérico inválido em \"{label}\"."),
+                format!(
+                    "Por favor, verifique os parâmetros. Valor numérico inválido em \"{label}\"."
+                ),
             ),
         }
     }
