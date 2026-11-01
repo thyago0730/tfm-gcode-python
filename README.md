@@ -33,7 +33,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all -- --check
 ```
 
-A suíte cobre o motor (unitários por módulo e integração em `crates/tfm-core/tests/`, incluindo as fixtures golden) e a interface (estado dos campos, preferências, cálculo em segundo plano, diálogos e ações). O teste `crates/tfm-app/tests/ui_parity.rs` confere, sem abrir janela, que os valores padrão da interface geram para a Espiral o mesmo G-code de `tests/golden/espiral_padrao.gcode`.
+A suíte cobre o motor (unitários por módulo e integração em `crates/tfm-core/tests/`, incluindo as fixtures golden) e a interface (estado dos campos, preferências, cálculo em segundo plano, diálogos e ações). O teste `crates/tfm-app/tests/ui_parity.rs` confere, sem abrir janela, que a interface — padrões, escolha da operação nos cartões e os campos digitados — gera, para cada uma das sete operações, o mesmo G-code das fixtures golden correspondentes. Os testes que precisam de um `config.json` completo leem a fixture `tests/fixtures/config_exemplo.json`; o `config/config.json` do repositório é só carregado, sem asserções sobre o conteúdo.
 
 ## Fixtures golden (paridade com o Python)
 
@@ -62,11 +62,13 @@ Os caminhos são relativos à **raiz do aplicativo**: a raiz do repositório em 
 
 ## Implementação de referência (Python)
 
-`src/app/` contém o aplicativo Python/Tkinter original (`TFM_GCODE.py`, `core/`, `ui/`). Ele não é mais o produto, mas é o **oráculo** do port: as fixtures golden saem dele e qualquer dúvida de comportamento se resolve lendo a função Python correspondente — os módulos Rust citam, no cabeçalho, o que portam. Ambiente: `.venv/` com `requirements.txt`.
+`src/app/` contém o aplicativo Python/Tkinter original (`TFM_GCODE.py`, `core/`, `ui/`). Ele não é mais o produto, mas é o **oráculo** do port: as fixtures golden saem dele e qualquer dúvida de comportamento se resolve lendo a função Python correspondente — os módulos Rust citam, no cabeçalho, o que portam. O ambiente Python (`.venv/` com `requirements.txt`) é opcional: só é preciso para regenerar as fixtures golden ou rodar os testes Python de referência.
 
 ## Diferenças em relação à versão Python
 
 - **"Camadas Inteligentes" agora funciona.** No Python a caixa existia, mas `_get_current_params` não copiava `smart_layers`/`root_feed_scale`, então ela não tinha efeito. No Rust o valor chega ao gerador e a camada de raiz usa o "% Vel. Raiz". Com a caixa desmarcada (padrão) o G-code é idêntico ao do Python.
+- **"Gerar G-code" na Oscilação Quadrada Contínua agora funciona.** No Python a validação lia a chave inexistente `granularidade_x` e sempre bloqueava a geração desse modo; no Rust a validação usa `osc_test_gran_x`, o campo que a interface realmente preenche.
+- **"Abrir no Mach3" passa pelos mesmos bloqueios de "Gerar G-code"** (campos, regras físicas, ISO 3834 e o alerta de segurança G53) e registra o arquivo gravado no log de auditoria ("GCode Generation (Mach3)"). No Python ele gravava e abria o Mach3 sem essas verificações.
 - **Tema escuro** usa tons mais claros da mesma paleta (`#3b82f6`, `#22c55e`, `#eab308`, `#ef4444`) por contraste sobre o fundo escuro; o tema claro usa exatamente as cores do design (`#2563eb`, `#16a34a`, `#ca8a04`, `#dc2626`).
 - **Relatório PDF** e **atualizador automático** (`latest.json`) ainda não foram portados; o item de menu do relatório aparece desabilitado ("em breve").
 - O `.tap` é gravado com fim de linha **CRLF** no Windows (como o Python gravava lá) e LF nos demais sistemas; o Mach3 aceita os dois.
