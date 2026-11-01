@@ -324,36 +324,44 @@ fn operation_selector(state: &mut UiState, palette: &Palette, ui: &mut Ui) {
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.small_button(arrow).on_hover_text(hint).clicked() {
-                    state.list_expanded = !state.list_expanded;
-                }
-                if ui.button("Padrão").on_hover_text(tip::PADRAO).clicked() {
-                    state.reset_defaults();
-                }
-                // O resto da linha (ícone + nome) também abre/fecha a lista.
-                let size = vec2(ui.available_width().max(ICON_SIZE.x), ICON_SIZE.y);
-                let inner =
-                    ui.allocate_ui_with_layout(size, Layout::left_to_right(Align::Center), |ui| {
-                        operation_icon(ui, op, ICON_SIZE, palette.text, palette.accent);
-                        ui.add_space(4.0);
-                        ui.add(
-                            Label::new(RichText::new(op.label()).strong().size(14.0))
-                                .selectable(false)
-                                .truncate(),
-                        );
-                    });
-                let response = ui
-                    .interact(
-                        inner.response.rect,
-                        ui.scope_id().with("op_header"),
-                        Sense::click(),
-                    )
-                    .on_hover_text(hint)
-                    .on_hover_cursor(CursorIcon::PointingHand);
-                if response.clicked() {
-                    state.list_expanded = !state.list_expanded;
-                }
+            // `horizontal` limita a altura a uma linha; sem ele o `with_layout`
+            // centralizaria a linha no painel inteiro e empurraria as abas e os
+            // campos para fora da tela.
+            ui.horizontal(|ui| {
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.small_button(arrow).on_hover_text(hint).clicked() {
+                        state.list_expanded = !state.list_expanded;
+                    }
+                    if ui.button("Padrão").on_hover_text(tip::PADRAO).clicked() {
+                        state.reset_defaults();
+                    }
+                    // O resto da linha (ícone + nome) também abre/fecha a lista.
+                    let size = vec2(ui.available_width().max(ICON_SIZE.x), ICON_SIZE.y);
+                    let inner = ui.allocate_ui_with_layout(
+                        size,
+                        Layout::left_to_right(Align::Center),
+                        |ui| {
+                            operation_icon(ui, op, ICON_SIZE, palette.text, palette.accent);
+                            ui.add_space(4.0);
+                            ui.add(
+                                Label::new(RichText::new(op.label()).strong().size(14.0))
+                                    .selectable(false)
+                                    .truncate(),
+                            );
+                        },
+                    );
+                    let response = ui
+                        .interact(
+                            inner.response.rect,
+                            ui.scope_id().with("op_header"),
+                            Sense::click(),
+                        )
+                        .on_hover_text(hint)
+                        .on_hover_cursor(CursorIcon::PointingHand);
+                    if response.clicked() {
+                        state.list_expanded = !state.list_expanded;
+                    }
+                });
             });
         });
 
