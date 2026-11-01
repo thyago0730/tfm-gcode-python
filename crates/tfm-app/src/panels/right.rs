@@ -321,11 +321,8 @@ pub fn show_right(app: &mut TfmApp, ui: &mut Ui) {
     };
     match action {
         Some(Action::CopyAll) => copy_gcode(app, ui.ctx()),
-        // A Tarefa 23 liga aqui o salvamento real do .tap.
-        Some(Action::SaveTap) => app.notify(
-            NotifyKind::Info,
-            "Use Gerar G-code para salvar o arquivo .tap",
-        ),
+        // Mesmo fluxo do botão "Gerar G-code" (validações, alerta G53, auditoria).
+        Some(Action::SaveTap) => crate::integration::generate_tap(app),
         None => {}
     }
 }

@@ -8,6 +8,7 @@ pub mod charts;
 pub mod compute;
 pub mod dialogs;
 pub mod icons;
+pub mod integration;
 pub mod panels;
 pub mod prefs;
 pub mod theme;
