@@ -18,7 +18,12 @@ Set-Location $root
 
 if (-not $SemBuild) {
     Write-Host '== cargo build --release -p tfm-app =='
+    # O cargo escreve o progresso em stderr; com 'Stop' o PowerShell 5.1
+    # trataria isso como erro quando a saída é redirecionada.
+    $eap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
     cargo build --release -p tfm-app
+    $ErrorActionPreference = $eap
     if ($LASTEXITCODE -ne 0) {
         Write-Host 'Build falhou; nada foi copiado nem aberto.'
         exit 1
