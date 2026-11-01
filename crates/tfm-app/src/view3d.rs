@@ -6,6 +6,13 @@
 //! peça (cilindro, chapa ou bolacha) e a trajetória colorida por camada.
 //! A simulação ([`Sim`]) desenha o percurso até `progress` e marca a tocha.
 //!
+//! Nas operações cilíndricas (tudo que não é chapa plana nem bolacha) a cena
+//! reproduz a máquina: a tocha fica fixa no topo e anda só em X (e em Z por
+//! camada); quem gira em torno do centro do eixo A é a peça, levando junto o
+//! cordão já depositado. Cada ponto é girado de `-A` ([`rotate_part`]) pelo
+//! ângulo do ponto que está sendo depositado ([`current_point`]), que assim
+//! cai sempre sob a tocha; as geratrizes da silhueta giram junto.
+//!
 //! O `TfmApp` só guarda o marcador [`View3d`]; o estado de verdade
 //! ([`ViewState`]) vive na memória do egui e é acessado por [`with_state`]:
 //! assim o menu "Simulação" aciona presets e ▶ ⏸ ⏹ sem tocar no `app.rs`.
@@ -643,6 +650,22 @@ impl Bounds {
 fn scene_bounds(toolpath: Option<&Toolpath>, params: Option<&Params>) -> Bounds {
     if let Some(tp) = toolpath {
         if is_finite(tp.min) && is_finite(tp.max) {
+            // A peça cilíndrica gira: a caixa em Y/Z vai até o maior raio
+            // alcançado, para o enquadramento não depender de onde o cordão
+            // parou.
+            if params.is_some_and(part_rotates) {
+                let r = tp
+                    .min
+                    .y
+                    .abs()
+                    .max(tp.max.y.abs())
+                    .max(tp.min.z.abs())
+                    .max(tp.max.z.abs());
+                return Bounds {
+                    min: Vec3::new(tp.min.x, -r, -r),
+                    max: Vec3::new(tp.max.x, r, r),
+                };
+            }
             return Bounds {
                 min: tp.min,
                 max: tp.max,
@@ -708,6 +731,57 @@ fn flat_size(p: &Params) -> (f32, f32) {
     }
 }
 
+/// Nas operações cilíndricas quem gira é a peça (eixo A); a tocha fica fixa
+/// no topo e anda só em X. Chapa plana e bolacha não giram na cena.
+fn part_rotates(p: &Params) -> bool {
+    !matches!(
+        p.welding_mode,
+        WeldingMode::ChapaPlana | WeldingMode::Bolacha
+    )
+}
+
+/// Gira `pos` em torno do eixo X de `-a_deg`: o ponto que está no ângulo A
+/// da peça vai para o topo (sob a tocha), como quando a peça gira na
+/// máquina. X e o raio não mudam; ângulo zero ou não finito devolve o ponto
+/// como está.
+fn rotate_part(pos: Vec3, a_deg: f32) -> Vec3 {
+    if a_deg == 0.0 || !a_deg.is_finite() {
+        return pos;
+    }
+    let (s, c) = a_deg.to_radians().sin_cos();
+    Vec3::new(pos.x, pos.y * c + pos.z * s, pos.z * c - pos.y * s)
+}
+
+/// Quantos pontos do percurso o quadro desenha: todos fora da simulação; a
+/// fração `progress` (ao menos um) durante ela; nenhum sem percurso.
+fn draw_limit(sim: &Sim, total: usize) -> usize {
+    if total == 0 {
+        0
+    } else if sim.active() {
+        ((sim.progress * total as f32).round() as usize).clamp(1, total)
+    } else {
+        total
+    }
+}
+
+/// O ponto que está sendo depositado neste quadro: o último dos `limit`
+/// pontos desenhados (`None` sem pontos). Ele dita a rotação da peça e a
+/// leitura da tocha.
+fn current_point(tp: &Toolpath, limit: usize) -> Option<&PathPoint> {
+    let total = tp.point_count();
+    if limit == 0 || total == 0 {
+        return None;
+    }
+    let mut index = limit.min(total) - 1;
+    for seg in &tp.segments {
+        if index < seg.len() {
+            return seg.get(index);
+        }
+        index -= seg.len();
+    }
+    None
+}
+
 fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     let palette = app.palette;
     let result = app.result.as_ref();
@@ -734,10 +808,19 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
         ui.ctx().request_repaint();
     }
 
+    // Nas operações cilíndricas quem gira é a peça: o ponto que está sendo
+    // depositado fica sempre no topo, sob a tocha fixa. Fora da simulação o
+    // "atual" é o último ponto, então a peça aparece como termina.
+    let rotates = result.is_some_and(|r| part_rotates(&r.params));
+    let current = toolpath
+        .filter(|_| rotates)
+        .and_then(|tp| current_point(tp, draw_limit(&state.sim, total)));
+    let rotation = current.map_or(0.0, |pt| pt.a_deg);
+
     let proj = Projector::new(&state.cam, rect);
     draw_grid(&painter, &proj, &bounds, &palette);
     if let Some(r) = result {
-        draw_reference(&painter, &proj, &r.params, toolpath, &palette);
+        draw_reference(&painter, &proj, &r.params, toolpath, rotation, &palette);
     }
     let picked = match toolpath {
         Some(tp) => {
@@ -758,6 +841,7 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
                 app.gcode_view.selected_line,
                 pointer,
                 stick,
+                rotation,
             )
         }
         None => {
@@ -776,7 +860,8 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
             None
         }
     };
-    overlay(&painter, rect, toolpath, &palette);
+    let readout = current.filter(|_| state.sim.active());
+    overlay(&painter, rect, toolpath, readout, &palette);
     picked
 }
 
@@ -920,11 +1005,14 @@ fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, palette: &Palette)
 
 /// Silhueta da peça em cinza fino: cilindro (dois círculos + 4 geratrizes),
 /// chapa (retângulo na altura da tocha) ou bolacha (anéis interno/externo).
+/// `rotation` é o ângulo A atual da peça: as geratrizes do cilindro giram
+/// com ela (ver [`rotate_part`]); chapa e bolacha ignoram o valor.
 fn draw_reference(
     painter: &Painter,
     proj: &Projector,
     p: &Params,
     toolpath: Option<&Toolpath>,
+    rotation: f32,
     palette: &Palette,
 ) {
     let stroke = Stroke::new(1.0, palette.muted.gamma_multiply(0.8));
@@ -981,7 +1069,10 @@ fn draw_reference(
             draw_circle(painter, proj, x1, r, stroke);
             for k in 0..4 {
                 let (s, c) = (k as f32 * std::f32::consts::FRAC_PI_2).sin_cos();
-                line(Vec3::new(x0, r * c, r * s), Vec3::new(x1, r * c, r * s));
+                line(
+                    rotate_part(Vec3::new(x0, r * c, r * s), rotation),
+                    rotate_part(Vec3::new(x1, r * c, r * s), rotation),
+                );
             }
         }
     }
@@ -1020,6 +1111,9 @@ impl Style {
 
 /// Desenha a trajetória (até `progress` quando a simulação está ativa), os
 /// pontos de solda, a linha selecionada e a tocha (vareta de `stick` mm).
+/// `rotation` é o ângulo A atual da peça: cada ponto é girado por
+/// [`rotate_part`] antes de ser projetado, de modo que o ponto sendo
+/// depositado fique no topo, sob a tocha (0.0 em chapa plana e bolacha).
 /// `pointer` é a posição de um clique neste quadro; devolve a linha do ponto
 /// mais próximo dele, se ficou a menos de [`PICK_RADIUS`].
 #[allow(clippy::too_many_arguments)]
@@ -1032,6 +1126,7 @@ fn draw_path(
     selected: Option<usize>,
     pointer: Option<Pos2>,
     stick: f32,
+    rotation: f32,
 ) -> Option<usize> {
     let total = tp.point_count();
     if total == 0 {
@@ -1039,11 +1134,7 @@ fn draw_path(
     }
     let step = decimation_step(total);
     let weld_stride = total.div_ceil(MAX_WELD_DOTS).max(step);
-    let limit = if state.sim.active() {
-        ((state.sim.progress * total as f32).round() as usize).clamp(1, total)
-    } else {
-        total
-    };
+    let limit = draw_limit(&state.sim, total);
     let (show_trace, show_weld) = (state.sim.show_trace, state.sim.show_weld);
 
     let mut best: Option<(f32, usize)> = None;
@@ -1065,7 +1156,8 @@ fn draw_path(
                 continue;
             }
             let style = Style::of(pt);
-            let screen = proj.project(pt.pos);
+            let pos = rotate_part(pt.pos, rotation);
+            let screen = proj.project(pos);
             if let Some(s) = screen {
                 if let Some(ptr) = pointer {
                     let d = s.distance_sq(ptr);
@@ -1076,7 +1168,7 @@ fn draw_path(
                 if selected_at.is_none() && selected == Some(pt.line_idx) {
                     selected_at = Some(s);
                 }
-                torch_at = Some((pt.pos, s));
+                torch_at = Some((pos, s));
                 if show_weld
                     && pt.torch_on
                     && !pt.rapid
@@ -1165,11 +1257,27 @@ fn flush_run(painter: &Painter, points: &[Pos2], style: Option<Style>, palette: 
     }
 }
 
-/// Textos sobre o viewport: resumo (acima, à esquerda), aviso de decimação
-/// (abaixo, à esquerda) e dica de uso (abaixo, à direita).
-fn overlay(painter: &Painter, rect: Rect, toolpath: Option<&Toolpath>, palette: &Palette) {
+/// Textos sobre o viewport: resumo (acima, à esquerda), leitura da máquina
+/// durante a simulação (acima, à direita: X da tocha e ângulo A da peça),
+/// aviso de decimação (abaixo, à esquerda) e dica de uso (abaixo, à direita).
+fn overlay(
+    painter: &Painter,
+    rect: Rect,
+    toolpath: Option<&Toolpath>,
+    current: Option<&PathPoint>,
+    palette: &Palette,
+) {
     let font = FontId::proportional(11.0);
     let pad = vec2(8.0, 6.0);
+    if let Some(pt) = current {
+        painter.text(
+            rect.right_top() + vec2(-pad.x, pad.y),
+            Align2::RIGHT_TOP,
+            format!("Tocha X {:.3} · Peça A {:.1}°", pt.pos.x, pt.a_deg),
+            font.clone(),
+            palette.text,
+        );
+    }
     if let Some(tp) = toolpath {
         let total = tp.point_count();
         let camadas = if tp.layer_count == 1 {
@@ -1611,7 +1719,7 @@ mod tests {
         let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
             draw_grid(&painter, &proj, &bounds, &palette);
-            draw_reference(&painter, &proj, &params, Some(&tp), &palette);
+            draw_reference(&painter, &proj, &params, Some(&tp), 0.0, &palette);
             picked = draw_path(
                 &painter,
                 &proj,
@@ -1621,6 +1729,7 @@ mod tests {
                 Some(first.line_idx),
                 click,
                 5.0,
+                0.0,
             );
         });
         // Sem renderizador ninguém aplica o atlas de fontes: o egui exige
@@ -1650,5 +1759,187 @@ mod tests {
         ] {
             assert!(colors.contains(&c.to_array()), "eixo {axis} ausente");
         }
+    }
+
+    /// Recolhe círculos preenchidos (centro, cor) e textos pintados num quadro.
+    fn collect_shapes(shape: &Shape, circles: &mut Vec<(Pos2, [u8; 4])>, texts: &mut Vec<String>) {
+        match shape {
+            Shape::Vec(v) => v.iter().for_each(|s| collect_shapes(s, circles, texts)),
+            Shape::Circle(c) => circles.push((c.center, c.fill.to_array())),
+            Shape::Text(t) => texts.push(t.galley.text().to_owned()),
+            _ => {}
+        }
+    }
+
+    /// Só as operações cilíndricas giram a peça; chapa plana e bolacha ficam
+    /// como estão.
+    #[test]
+    fn part_rotates_only_in_cylindrical_operations() {
+        for op in [
+            Operation::Espiral,
+            Operation::EspiralMultiperfil,
+            Operation::OscilacaoLinear,
+            Operation::OscilacaoQuadrada,
+            Operation::OscilacaoQuadradaContinua,
+            Operation::ChapaPlana,
+            Operation::Bolacha,
+        ] {
+            let mut p = Params::default();
+            p.apply_operation(op);
+            let expected = !matches!(op, Operation::ChapaPlana | Operation::Bolacha);
+            assert_eq!(part_rotates(&p), expected, "operação {op:?}");
+        }
+    }
+
+    /// Girar a peça de `-A` leva o ponto que está no ângulo `A` para o topo
+    /// (sob a tocha), mantendo X e o raio.
+    #[test]
+    fn rotate_part_brings_current_angle_to_top() {
+        // Ponto a A = 90° na convenção do toolpath: (x, r·cos 180°, r·sin 180°).
+        let p = Vec3::new(12.5, -40.0, 0.0);
+        let top = rotate_part(p, 90.0);
+        assert!((top.x - 12.5).abs() < 1e-4, "X mudou: {top:?}");
+        assert!(
+            top.y.abs() < 1e-3 && (top.z - 40.0).abs() < 1e-3,
+            "esperava o topo (0, 40), veio {top:?}"
+        );
+        // Volta inteira e ângulo zero não mexem no ponto.
+        let same = rotate_part(p, 360.0);
+        assert!(
+            (same.y - p.y).abs() < 1e-3 && same.z.abs() < 1e-3,
+            "volta inteira moveu o ponto: {same:?}"
+        );
+        assert_eq!(rotate_part(p, 0.0), p);
+        // O raio é sempre preservado.
+        let r = rotate_part(p, 123.4);
+        assert!(
+            ((r.y * r.y + r.z * r.z).sqrt() - 40.0).abs() < 1e-3,
+            "{r:?}"
+        );
+        // Ângulo não finito não espalha NaN pela cena.
+        assert_eq!(rotate_part(p, f32::NAN), p);
+    }
+
+    /// O ponto "atual" é o último dos `limit` pontos desenhados: ele dita a
+    /// rotação da peça e a leitura da tocha.
+    #[test]
+    fn current_point_is_last_drawn_point() {
+        let params = Params::default();
+        let lines = tfm_core::gcode::generate(&params).unwrap_or_else(|e| panic!("{e}"));
+        let tp = tfm_core::toolpath::build_toolpath(&lines, &params);
+        let total = tp.point_count();
+        assert!(total > 2, "percurso curto demais: {total}");
+        let all: Vec<PathPoint> = tp.points().copied().collect();
+        assert_eq!(current_point(&tp, 0), None);
+        assert_eq!(current_point(&tp, 1), Some(&all[0]));
+        assert_eq!(current_point(&tp, total / 2), Some(&all[total / 2 - 1]));
+        assert_eq!(current_point(&tp, total), Some(&all[total - 1]));
+        assert_eq!(current_point(&tp, total + 7), Some(&all[total - 1]));
+    }
+
+    /// Quantos pontos o quadro desenha: todos fora da simulação, a fração
+    /// `progress` (nunca zero) durante ela, e zero sem percurso.
+    #[test]
+    fn draw_limit_follows_simulation_progress() {
+        let mut sim = Sim::default();
+        assert_eq!(draw_limit(&sim, 100), 100);
+        assert_eq!(draw_limit(&sim, 0), 0);
+        sim.play();
+        assert_eq!(
+            draw_limit(&sim, 100),
+            1,
+            "no início desenha ao menos um ponto"
+        );
+        sim.progress = 0.5;
+        assert_eq!(draw_limit(&sim, 100), 50);
+        sim.pause();
+        assert_eq!(
+            draw_limit(&sim, 100),
+            50,
+            "pausada no meio continua parcial"
+        );
+        sim.progress = 1.0;
+        assert_eq!(draw_limit(&sim, 100), 100);
+        assert_eq!(draw_limit(&sim, 0), 0);
+    }
+
+    /// A caixa da cena cilíndrica é simétrica em Y e Z: a peça gira, então o
+    /// enquadramento não pode depender de onde o cordão parou.
+    #[test]
+    fn cylindrical_scene_bounds_are_symmetric_in_yz() {
+        let tp = Toolpath {
+            segments: Vec::new(),
+            min: Vec3::new(0.0, -10.0, -3.0),
+            max: Vec3::new(100.0, 2.0, 12.0),
+            layer_count: 1,
+        };
+        let b = scene_bounds(Some(&tp), Some(&Params::default()));
+        assert_eq!(b.min, Vec3::new(0.0, -12.0, -12.0));
+        assert_eq!(b.max, Vec3::new(100.0, 12.0, 12.0));
+        let mut flat = Params::default();
+        flat.apply_operation(Operation::ChapaPlana);
+        let f = scene_bounds(Some(&tp), Some(&flat));
+        assert_eq!((f.min, f.max), (tp.min, tp.max), "chapa plana não gira");
+    }
+
+    /// Durante a simulação da espiral a tocha fica no topo da peça: o
+    /// marcador vermelho aparece onde o ponto atual cai depois de girar a
+    /// peça, e a leitura mostra o X da tocha e o A da peça.
+    #[test]
+    fn simulated_torch_stays_on_top_of_rotating_part() {
+        let params = Params::default();
+        let lines = tfm_core::gcode::generate(&params).unwrap_or_else(|e| panic!("{e}"));
+        let tp = tfm_core::toolpath::build_toolpath(&lines, &params);
+        let total = tp.point_count();
+        let palette = Palette::light();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let mut state = ViewState::default();
+        state.cam.fit(tp.min, tp.max);
+        state.sim.play();
+        state.sim.progress = 0.5;
+        state.sim.pause();
+        let limit = draw_limit(&state.sim, total);
+        let cur = current_point(&tp, limit)
+            .copied()
+            .unwrap_or_else(|| panic!("sem ponto atual"));
+        assert!(cur.a_deg.abs() > 1.0, "o meio da espiral já girou a peça");
+        let top = Vec3::new(cur.pos.x, 0.0, cur.radius);
+        let proj = Projector::new(&state.cam, rect);
+        let expected = proj
+            .project(top)
+            .unwrap_or_else(|| panic!("o topo da peça deveria estar visível"));
+
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            draw_path(
+                &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, cur.a_deg,
+            );
+            overlay(&painter, rect, Some(&tp), Some(&cur), &palette);
+        });
+        output.textures_delta.clear();
+
+        let (mut circles, mut texts) = (Vec::new(), Vec::new());
+        for clipped in &output.shapes {
+            collect_shapes(&clipped.shape, &mut circles, &mut texts);
+        }
+        let danger = palette.danger.to_array();
+        let Some((center, _)) = circles.iter().find(|(_, c)| *c == danger) else {
+            panic!("marcador da tocha ausente");
+        };
+        assert!(
+            center.distance(expected) < 1.5,
+            "tocha em {center:?}, topo projetado em {expected:?}"
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|t| t.contains("Peça A") && t.contains('°')),
+            "leitura do ângulo da peça ausente: {texts:?}"
+        );
+        assert!(
+            texts.iter().any(|t| t.contains("Tocha X")),
+            "leitura da posição da tocha ausente: {texts:?}"
+        );
     }
 }
