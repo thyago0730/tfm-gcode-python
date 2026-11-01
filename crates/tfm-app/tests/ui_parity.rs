@@ -1,35 +1,77 @@
 //! Paridade do G-code pelo caminho da interface, sem abrir janela.
 //!
-//! O que o operador vê ao abrir o app — `UiState::default()` sobre um
-//! `AppConfig::default()` — precisa gerar, para a Espiral, exatamente a fixture
-//! `tests/golden/espiral_padrao.gcode` produzida pelo Python. O teste golden de
-//! `tfm-core` parte dos parâmetros em JSON; este parte dos textos dos campos e
-//! passa por `UiState::to_params`, cobrindo a conversão texto -> `Params`.
+//! O que o operador faz no app — abrir com `UiState::default()` sobre um
+//! `AppConfig::default()`, escolher a operação nos cartões e digitar só os
+//! campos que diferem do padrão — precisa gerar, para cada uma das sete
+//! operações, exatamente a fixture `tests/golden/<caso>.gcode` produzida pelo
+//! Python. O teste golden de `tfm-core` parte dos parâmetros em JSON; este
+//! parte dos textos dos campos e passa por `UiState::set_operation` e
+//! `UiState::to_params`, cobrindo a troca de operação e a conversão
+//! texto -> `Params`.
 //!
 //! Como nas fixtures, a data é fixada em `01/01/2000 00:00:00` e a versão em
 //! `11.3.2` (o app imprime a sua própria). O fator e o custo do pó vêm do
 //! config e só entram na estimativa de custos, nunca no G-code.
 
 use std::fs;
+use std::path::{Path, PathBuf};
 
+use serde::de::DeserializeOwned;
+use serde::Deserialize;
+use serde_json::{Map, Value};
 use tfm_app::ui_state::UiState;
 use tfm_core::config::AppConfig;
 use tfm_core::gcode::generate_with_timestamp;
 use tfm_core::params::{Operation, Params};
 
-const GOLDEN: &str = concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../tests/golden/espiral_padrao.gcode"
-);
+const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/golden");
 const TIMESTAMP: &str = "01/01/2000 00:00:00";
 const GOLDEN_VERSION: &str = "11.3.2";
 
+/// Chaves de `cases.json` que o operador não digita: a operação vem dos
+/// cartões (`set_operation`), o pó do config, a versão é fixada pelo teste e
+/// os espelhos de velocidade são derivados por `to_params`.
+const NOT_TYPED: [&str; 7] = [
+    "welding_mode",
+    "oscillation_type",
+    "powder_factor",
+    "powder_cost_brl_kg",
+    "app_version",
+    "taxa_de_deposicao",
+    "velocidade_a_mm_min",
+];
+
+#[derive(Deserialize)]
+struct Case {
+    name: String,
+    params: Map<String, Value>,
+}
+
+fn golden_path(file: &str) -> PathBuf {
+    Path::new(GOLDEN_DIR).join(file)
+}
+
+fn read_golden(file: &str) -> String {
+    let path = golden_path(file);
+    fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("não foi possível ler {}: {e}", path.display()))
+}
+
+/// O caso `name` de `cases.json`.
+fn load_case(name: &str) -> Case {
+    let cases: Vec<Case> =
+        serde_json::from_str(&read_golden("cases.json")).expect("cases.json válido");
+    cases
+        .into_iter()
+        .find(|c| c.name == name)
+        .unwrap_or_else(|| panic!("caso {name:?} ausente em cases.json"))
+}
+
 /// Linhas da fixture; um `\r` final por linha é descartado (defesa contra
 /// checkouts CRLF). O arquivo termina em `%` sem newline final.
-fn expected_lines() -> Vec<String> {
-    let text =
-        fs::read_to_string(GOLDEN).unwrap_or_else(|e| panic!("não foi possível ler {GOLDEN}: {e}"));
-    text.split('\n')
+fn expected_lines(name: &str) -> Vec<String> {
+    read_golden(&format!("{name}.gcode"))
+        .split('\n')
         .map(|l| l.strip_suffix('\r').unwrap_or(l).to_string())
         .collect()
 }
@@ -56,6 +98,83 @@ fn first_difference(expected: &[String], got: &[String]) -> Option<String> {
     None
 }
 
+/// Texto que o operador digitaria para um valor do JSON (`50.0` -> `"50.0"`,
+/// `100` -> `"100"`, textos como estão).
+fn typed_text(key: &str, value: &Value) -> String {
+    match value {
+        Value::String(s) => s.clone(),
+        Value::Number(n) => n.to_string(),
+        Value::Bool(b) => b.to_string(),
+        other => panic!("{key}: valor {other} não cabe num campo de texto"),
+    }
+}
+
+fn enum_of<T: DeserializeOwned>(key: &str, value: &Value) -> T {
+    serde_json::from_value(value.clone()).unwrap_or_else(|e| panic!("{key}: {e}"))
+}
+
+/// Escreve `value` no campo da interface identificado por `key` (texto,
+/// caixa de seleção ou combo).
+fn apply_key(ui: &mut UiState, key: &str, value: &Value) {
+    if let Some(text) = ui.fields.get_mut(key) {
+        *text = typed_text(key, value);
+        return;
+    }
+    if let Some(flag) = ui.flags.get_mut(key) {
+        *flag = value
+            .as_bool()
+            .unwrap_or_else(|| panic!("{key}: {value} não é booleano"));
+        return;
+    }
+    match key {
+        "direcao_soldagem" => ui.direcao = enum_of(key, value),
+        "sentido_rotacao" => ui.rotacao = enum_of(key, value),
+        "flat_orientation" => ui.flat_orientation = enum_of(key, value),
+        "multiperfil_strategy" => ui.multiperfil_strategy = enum_of(key, value),
+        "multiperfil_profile_shape" => ui.profile_shape = enum_of(key, value),
+        "bolacha_tipo" => ui.bolacha_tipo = enum_of(key, value),
+        other => panic!("{other}: chave sem campo na interface"),
+    }
+}
+
+/// Aplica ao estado da interface só os valores do caso que diferem dos
+/// padrões (`Params::default()`), como um operador que edita o que precisa.
+/// Devolve as chaves digitadas.
+fn apply_overrides(ui: &mut UiState, case: &Case) -> Vec<String> {
+    let base = serde_json::to_value(Params::default()).expect("Params padrão serializa");
+    let mut typed = Vec::new();
+    for (key, value) in &case.params {
+        if NOT_TYPED.contains(&key.as_str()) || base.get(key) == Some(value) {
+            continue;
+        }
+        apply_key(ui, key, value);
+        typed.push(key.clone());
+    }
+    typed
+}
+
+/// Abre o app nos padrões, escolhe `op` nos cartões, digita os desvios do
+/// caso e compara o G-code gerado com a fixture, linha a linha.
+fn check_case(name: &str, op: Operation) {
+    let case = load_case(name);
+    let mut ui = UiState::from_params(&Params::default());
+    ui.set_operation(op);
+    assert_eq!(ui.operation, op, "{name}: operação escolhida");
+    let typed = apply_overrides(&mut ui, &case);
+
+    let mut p = ui.to_params(&AppConfig::default());
+    assert_eq!(Operation::from_params(&p), op, "{name}: operação aplicada");
+    p.app_version = Some(GOLDEN_VERSION.to_string());
+
+    let got = generate_with_timestamp(&p, TIMESTAMP)
+        .unwrap_or_else(|e| panic!("{name}: gerador falhou pelos campos da UI: {e}"));
+    if let Some(diff) = first_difference(&expected_lines(name), &got) {
+        panic!(
+            "{name}: G-code pela UI difere de {name}.gcode (campos digitados: {typed:?}): {diff}"
+        );
+    }
+}
+
 #[test]
 fn ui_padrao_abre_na_espiral_com_os_defaults_do_python() {
     let ui = UiState::default();
@@ -64,16 +183,57 @@ fn ui_padrao_abre_na_espiral_com_os_defaults_do_python() {
 }
 
 #[test]
-fn espiral_padrao_pela_ui_e_identica_ao_golden() {
-    let cfg = AppConfig::default();
-    let mut p = UiState::default().to_params(&cfg);
-    p.app_version = Some(GOLDEN_VERSION.to_string());
+fn espiral_padrao_pela_ui() {
+    check_case("espiral_padrao", Operation::Espiral);
+}
 
-    let got = generate_with_timestamp(&p, TIMESTAMP)
-        .unwrap_or_else(|e| panic!("gerador falhou com os defaults da UI: {e}"));
-    let expected = expected_lines();
+#[test]
+fn multiperfil_retangular_pela_ui() {
+    check_case("multiperfil_retangular", Operation::EspiralMultiperfil);
+}
 
-    if let Some(diff) = first_difference(&expected, &got) {
-        panic!("G-code pela UI difere de espiral_padrao.gcode: {diff}");
-    }
+#[test]
+fn bolacha_espiral_pela_ui() {
+    check_case("bolacha_espiral", Operation::Bolacha);
+}
+
+#[test]
+fn chapa_x_pela_ui() {
+    check_case("chapa_x", Operation::ChapaPlana);
+}
+
+#[test]
+fn osc_linear_pela_ui() {
+    check_case("osc_linear", Operation::OscilacaoLinear);
+}
+
+#[test]
+fn osc_quadrada_pela_ui() {
+    check_case("osc_quadrada", Operation::OscilacaoQuadrada);
+}
+
+#[test]
+fn osc_quad_continua_pela_ui() {
+    check_case("osc_quad_continua", Operation::OscilacaoQuadradaContinua);
+}
+
+/// Os desvios que cada caso realmente digita, para o teste não passar "por
+/// acaso" com todos os campos iguais ao padrão.
+#[test]
+fn overrides_dos_casos_sao_os_esperados() {
+    let typed = |name: &str, op: Operation| {
+        let mut ui = UiState::from_params(&Params::default());
+        ui.set_operation(op);
+        apply_overrides(&mut ui, &load_case(name))
+    };
+    assert!(typed("espiral_padrao", Operation::Espiral).is_empty());
+    assert_eq!(typed("bolacha_espiral", Operation::Bolacha), ["diametro"]);
+    assert_eq!(
+        typed("osc_quadrada", Operation::OscilacaoQuadrada),
+        ["comprimento_revestir"]
+    );
+    assert_eq!(
+        typed("osc_quad_continua", Operation::OscilacaoQuadradaContinua),
+        ["comprimento_revestir"]
+    );
 }
