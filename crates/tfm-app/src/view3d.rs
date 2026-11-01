@@ -462,7 +462,7 @@ pub fn speed_label(speed: f32) -> String {
 // ---------------------------------------------------------------------------
 
 /// Lado (px) do quadrado reservado ao cubo de orientação no canto do viewport.
-pub const CUBE_SIZE: f32 = 96.0;
+pub const CUBE_SIZE: f32 = 110.0;
 /// Margem do cubo até as bordas do viewport.
 const CUBE_MARGIN: f32 = 10.0;
 /// A partir desta fração da meia-aresta, o clique numa face "pega" a aresta
@@ -604,8 +604,32 @@ fn cube_pick(cam: &Camera, rect: Rect, pos: Pos2) -> Option<Vec3> {
     Some(normalize(dir))
 }
 
+/// Largura e altura (px) da face projetada, medidas pelas cordas horizontal
+/// e vertical que passam pelo centro dela: é o espaço que um rótulo
+/// horizontal centrado tem de verdade.
+fn cube_face_span(cam: &Camera, rect: Rect, face: &CubeFace) -> (f32, f32) {
+    let c = cube_project(cam, rect, face.normal);
+    let pu = cube_project(cam, rect, add(face.normal, face.u)) - c;
+    let pv = cube_project(cam, rect, add(face.normal, face.v)) - c;
+    let det = (pu.x * pv.y - pu.y * pv.x).abs();
+    let chord = |limit: f32| if limit > 1e-6 { 2.0 * det / limit } else { 0.0 };
+    (
+        chord(pu.y.abs().max(pv.y.abs())),
+        chord(pu.x.abs().max(pv.x.abs())),
+    )
+}
+
+/// Tamanho da fonte do rótulo de uma face com `width` x `height` px: cabe
+/// na largura (≈0,6 em por letra, com folga) e na altura, no máximo 10 px;
+/// `None` quando ficaria pequeno demais para ler.
+fn cube_label_size(width: f32, height: f32, label: &str) -> Option<f32> {
+    let chars = label.chars().count().max(1) as f32;
+    let size = (0.9 * width / (0.6 * chars)).min(0.6 * height).min(10.0);
+    (size >= 6.5).then_some(size)
+}
+
 /// Desenha o cubo: faces visíveis preenchidas (a de rótulo `hover` em
-/// destaque), arestas e o rótulo das faces que não estão muito de lado.
+/// destaque), arestas e o rótulo das faces onde ele cabe legível.
 fn draw_view_cube(
     painter: &Painter,
     cam: &Camera,
@@ -633,8 +657,8 @@ fn draw_view_cube(
             palette.muted.gamma_multiply(0.18 + 0.22 * facing)
         };
         painter.add(Shape::convex_polygon(pts, fill, edge));
-        if facing > 0.3 {
-            let size = if face.label.len() > 5 { 9.0 } else { 10.0 };
+        let (width, height) = cube_face_span(cam, rect, face);
+        if let Some(size) = cube_label_size(width, height, face.label) {
             painter.text(
                 cube_project(cam, rect, face.normal),
                 Align2::CENTER_CENTER,
@@ -2155,6 +2179,35 @@ mod tests {
             .unwrap_or_else(|| panic!("canto não atingido"));
         let want = normalize(Vec3::new(-1.0, -1.0, 1.0));
         assert!(length(sub(dir, want)) < 1e-3, "{dir:?}");
+    }
+
+    /// O rótulo encolhe para caber na largura da face projetada e some
+    /// quando ficaria ilegível; a face de frente para a câmera é um
+    /// quadrado de lado 2·s.
+    #[test]
+    fn cube_labels_shrink_to_fit_the_face() {
+        let size = cube_label_size(38.0, 55.0, "ESQUERDA")
+            .unwrap_or_else(|| panic!("ESQUERDA deveria caber em 38 px"));
+        assert!(
+            size * 8.0 * 0.6 <= 38.0 * 0.9 + 1e-3 && size >= 6.5,
+            "tamanho {size}"
+        );
+        assert_eq!(cube_label_size(60.0, 60.0, "TOPO"), Some(10.0));
+        assert_eq!(cube_label_size(20.0, 55.0, "ESQUERDA"), None);
+
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Frente);
+        let rect = Rect::from_min_size(pos2(0.0, 0.0), vec2(96.0, 96.0));
+        let frente = CUBE_FACES
+            .iter()
+            .find(|f| f.label == "FRENTE")
+            .unwrap_or_else(|| panic!("face FRENTE"));
+        let (w, h) = cube_face_span(&cam, rect, frente);
+        let side = 2.0 * 48.0 / 1.8;
+        assert!(
+            (w - side).abs() < 0.5 && (h - side).abs() < 0.5,
+            "{w} x {h}"
+        );
     }
 
     /// O cubo fica no canto superior direito do viewport e só rotula as
