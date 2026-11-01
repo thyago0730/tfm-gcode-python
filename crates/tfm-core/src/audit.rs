@@ -25,6 +25,12 @@ pub const DEFAULT_USER: &str = "Engenharia";
 /// Pasta padrão dos logs (`logs_dir="data/logs"` no Python).
 pub const DEFAULT_LOGS_DIR: &str = "data/logs";
 
+/// `datetime.isoformat()` do Python para um instante local sem fuso:
+/// `AAAA-MM-DDTHH:MM:SS.ffffff` (microssegundos sempre com seis dígitos).
+pub fn isoformat(now: &NaiveDateTime) -> String {
+    now.format("%Y-%m-%dT%H:%M:%S%.6f").to_string()
+}
+
 /// Uma entrada do log, na ordem de chaves do Python.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AuditEntry {
@@ -96,7 +102,7 @@ impl AuditLogger {
     ) -> io::Result<AuditEntry> {
         let path = self.path_for(now.date());
         let entry = AuditEntry {
-            timestamp: now.format("%Y-%m-%dT%H:%M:%S%.6f").to_string(),
+            timestamp: isoformat(&now),
             category: category.to_string(),
             detail: detail.to_string(),
             user: user.to_string(),
@@ -121,5 +127,19 @@ impl AuditLogger {
                 .collect(),
             _ => Vec::new(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `datetime.isoformat()`: microssegundos sempre com seis dígitos.
+    #[test]
+    fn isoformat_matches_python() {
+        let t = NaiveDate::from_ymd_opt(2026, 10, 31)
+            .and_then(|d| d.and_hms_micro_opt(14, 30, 5, 120))
+            .expect("data fixa");
+        assert_eq!(isoformat(&t), "2026-10-31T14:30:05.000120");
     }
 }
