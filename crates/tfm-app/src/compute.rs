@@ -29,6 +29,11 @@ use tfm_core::validator::{self, FieldErrors};
 /// (oscilação contínua com granularidade fina) nunca estouram a pilha padrão.
 const WORKER_STACK: usize = 16 * 1024 * 1024;
 
+/// Quem executa um pedido: recebe parâmetros, config e chave e devolve o
+/// resultado. O padrão é [`compute_all`]; testes (e motores alternativos)
+/// trocam por [`ComputeHandle::with_runner`].
+pub type JobRunner = Arc<dyn Fn(Params, &AppConfig, u64) -> ComputeResult + Send + Sync>;
+
 /// Tudo o que uma rodada de cálculo produz para um conjunto de parâmetros.
 #[derive(Clone, Debug)]
 pub struct ComputeResult {
@@ -55,10 +60,12 @@ pub struct ComputeResult {
 }
 
 impl ComputeResult {
-    /// Resultado vazio com uma mensagem de erro (geração impossível).
+    /// Resultado vazio com uma mensagem de erro em `gen_error`. É o que a
+    /// recuperação de pânico entrega, então **não roda código do motor**
+    /// (nem a validação): `field_errors` fica vazio.
     pub fn failed(params: Params, key: u64, message: impl Into<String>) -> Self {
         ComputeResult {
-            field_errors: validator::validate_physical(&params),
+            field_errors: FieldErrors::default(),
             params,
             lines: Vec::new(),
             gen_error: Some(message.into()),
@@ -204,20 +211,28 @@ pub struct ComputeHandle {
     /// Só quando a thread não pôde ser criada: calcula na própria chamada e
     /// entrega pelo mesmo canal, para o app continuar funcionando.
     inline_tx: Option<Sender<ComputeResult>>,
+    runner: JobRunner,
     last_requested: Option<u64>,
 }
 
 impl ComputeHandle {
-    /// Cria o trabalhador. `ctx` é usado para pedir repaint ao concluir.
+    /// Cria o trabalhador com o motor padrão ([`compute_all`]). `ctx` é usado
+    /// para pedir repaint ao concluir.
     pub fn new(ctx: egui::Context) -> Self {
+        Self::with_runner(ctx, Arc::new(compute_all))
+    }
+
+    /// Cria o trabalhador com um executor próprio (testes injetam falhas).
+    pub fn with_runner(ctx: egui::Context, runner: JobRunner) -> Self {
         let shared = Arc::new(Shared::default());
         let (tx, rx) = mpsc::channel();
         let worker_shared = Arc::clone(&shared);
         let worker_tx = tx.clone();
+        let worker_runner = Arc::clone(&runner);
         let spawned = thread::Builder::new()
             .name("tfm-compute".to_string())
             .stack_size(WORKER_STACK)
-            .spawn(move || worker_loop(worker_shared, worker_tx, ctx));
+            .spawn(move || worker_loop(worker_shared, worker_tx, ctx, worker_runner));
         let inline_tx = match spawned {
             Ok(_) => None,
             Err(err) => {
@@ -229,6 +244,7 @@ impl ComputeHandle {
             shared,
             rx,
             inline_tx,
+            runner,
             last_requested: None,
         }
     }
@@ -239,7 +255,7 @@ impl ComputeHandle {
     pub fn request(&mut self, params: Params, cfg: AppConfig, key: u64) {
         self.last_requested = Some(key);
         if let Some(tx) = &self.inline_tx {
-            let result = run_job(Job { params, cfg, key });
+            let result = run_job(&self.runner, params, &cfg, key);
             if tx.send(result).is_err() {
                 log::error!("Canal de resultados fechado");
             }
@@ -284,8 +300,15 @@ impl Drop for ComputeHandle {
     }
 }
 
-/// Laço do trabalhador: espera um pedido, calcula, entrega, pede repaint.
-fn worker_loop(shared: Arc<Shared>, tx: Sender<ComputeResult>, ctx: egui::Context) {
+/// Laço do trabalhador: espera um pedido e o atende; só sai quando a alça é
+/// descartada. Pânico nenhum escapa de [`serve_job`], então o laço continua
+/// atendendo pedidos depois de uma falha.
+fn worker_loop(
+    shared: Arc<Shared>,
+    tx: Sender<ComputeResult>,
+    ctx: egui::Context,
+    runner: JobRunner,
+) {
     loop {
         let job = {
             let mut queue = lock(&shared.queue);
@@ -303,37 +326,72 @@ fn worker_loop(shared: Arc<Shared>, tx: Sender<ComputeResult>, ctx: egui::Contex
                     .unwrap_or_else(|poisoned| poisoned.into_inner());
             }
         };
-        let key = job.key;
-        let started = Instant::now();
-        let result = run_job(job);
-        log::debug!(
-            "Cálculo {key:#018x} concluído em {:?}: {} linhas, {} avisos",
-            started.elapsed(),
-            result.lines.len(),
-            result.invariants.len()
-        );
-        let delivered = tx.send(result).is_ok();
-        lock(&shared.queue).running = false;
-        ctx.request_repaint();
-        if !delivered {
+        if !serve_job(&shared, &tx, &ctx, &runner, job) {
             // A alça foi descartada: ninguém mais vai ler.
             return;
         }
     }
 }
 
-/// Executa um pedido protegendo a thread: um pânico no motor vira um
-/// resultado com erro em vez de deixar a UI esperando para sempre.
-fn run_job(job: Job) -> ComputeResult {
-    let Job { params, cfg, key } = job;
-    let params_backup = params.clone();
-    match panic::catch_unwind(AssertUnwindSafe(|| compute_all(params, &cfg, key))) {
+/// Atende um pedido inteiro — cálculo, `running = false` e entrega — sem
+/// deixar pânico escapar. Devolve `false` só quando a alça foi descartada.
+///
+/// Duas linhas de defesa: [`run_job`] guarda o motor e devolve um resultado
+/// com `gen_error`; se ainda assim algo entrar em pânico (registro, canal,
+/// construção do resultado), o guarda externo limpa `running` e entrega um
+/// resultado de falha, para a UI nunca ficar em "calculando…" para sempre.
+fn serve_job(
+    shared: &Shared,
+    tx: &Sender<ComputeResult>,
+    ctx: &egui::Context,
+    runner: &JobRunner,
+    job: Job,
+) -> bool {
+    let key = job.key;
+    let fallback = job.params.clone();
+    let outcome = panic::catch_unwind(AssertUnwindSafe(|| {
+        let started = Instant::now();
+        let result = run_job(runner, job.params, &job.cfg, key);
+        log::debug!(
+            "Cálculo {key:#018x} concluído em {:?}: {} linhas, {} avisos",
+            started.elapsed(),
+            result.lines.len(),
+            result.invariants.len()
+        );
+        // `running` cai antes da entrega: quem recebe o resultado já vê o
+        // trabalhador ocioso.
+        lock(&shared.queue).running = false;
+        tx.send(result).is_ok()
+    }));
+    let delivered = match outcome {
+        Ok(delivered) => delivered,
+        Err(payload) => {
+            let message = panic_message(payload.as_ref());
+            log::error!("Pânico no trabalhador de cálculo {key:#018x}: {message}");
+            lock(&shared.queue).running = false;
+            let result = ComputeResult::failed(
+                fallback,
+                key,
+                format!("Falha interna no trabalhador de cálculo: {message}"),
+            );
+            tx.send(result).is_ok()
+        }
+    };
+    ctx.request_repaint();
+    delivered
+}
+
+/// Executa o motor protegido: um pânico vira um resultado com `gen_error`
+/// (construído sem rodar código do motor) em vez de derrubar a thread.
+fn run_job(runner: &JobRunner, params: Params, cfg: &AppConfig, key: u64) -> ComputeResult {
+    let fallback = params.clone();
+    match panic::catch_unwind(AssertUnwindSafe(|| runner(params, cfg, key))) {
         Ok(result) => result,
         Err(payload) => {
             let message = panic_message(payload.as_ref());
             log::error!("Pânico no cálculo {key:#018x}: {message}");
             ComputeResult::failed(
-                params_backup,
+                fallback,
                 key,
                 format!("Falha interna no cálculo: {message}"),
             )
@@ -358,6 +416,71 @@ mod tests {
     use std::time::{Duration, Instant};
     use tfm_core::config::AppConfig;
     use tfm_core::params::Params;
+
+    /// Faz `poll()` até chegar um resultado ou estourar `timeout`.
+    fn wait_result(handle: &mut ComputeHandle, timeout: Duration) -> Option<ComputeResult> {
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if let Some(result) = handle.poll() {
+                return Some(result);
+            }
+            sleep(Duration::from_millis(20));
+        }
+        None
+    }
+
+    /// Um motor que entra em pânico não mata o trabalhador: chega um
+    /// resultado com `gen_error` (sem rodar o motor de novo), `busy()` volta
+    /// a falso e o pedido seguinte, normal, ainda completa. Cobre pânico com
+    /// texto e com payload opaco.
+    #[test]
+    fn worker_survives_engine_panic() {
+        const PANIC_STR_KEY: u64 = 0xdead_0001;
+        const PANIC_ANY_KEY: u64 = 0xdead_0002;
+        let runner: JobRunner = Arc::new(
+            |params: Params, cfg: &AppConfig, key: u64| -> ComputeResult {
+                match key {
+                    PANIC_STR_KEY => panic!("motor explodiu de propósito"),
+                    PANIC_ANY_KEY => std::panic::panic_any(42_i32),
+                    _ => compute_all(params, cfg, key),
+                }
+            },
+        );
+        let mut handle = ComputeHandle::with_runner(egui::Context::default(), runner);
+        let cfg = AppConfig::default();
+
+        handle.request(Params::default(), cfg.clone(), PANIC_STR_KEY);
+        let failed = wait_result(&mut handle, Duration::from_secs(2))
+            .expect("resultado do pânico não chegou");
+        assert_eq!(failed.key, PANIC_STR_KEY);
+        let err = failed.gen_error.clone().unwrap_or_default();
+        assert!(
+            err.contains("Falha interna") && err.contains("motor explodiu"),
+            "gen_error = {err:?}"
+        );
+        assert!(failed.lines.is_empty());
+        assert!(
+            failed.field_errors.errors.is_empty(),
+            "falha não roda o motor"
+        );
+        assert!(!handle.busy(), "running deve ser limpo após o pânico");
+
+        handle.request(Params::default(), cfg.clone(), PANIC_ANY_KEY);
+        let failed = wait_result(&mut handle, Duration::from_secs(2))
+            .expect("resultado do segundo pânico não chegou");
+        let err = failed.gen_error.clone().unwrap_or_default();
+        assert!(err.contains("erro desconhecido"), "gen_error = {err:?}");
+
+        let params = Params::default();
+        let key = params_key(&params, &cfg);
+        handle.request(params, cfg, key);
+        let ok = wait_result(&mut handle, Duration::from_secs(2))
+            .expect("pedido depois do pânico não completou");
+        assert_eq!(ok.key, key);
+        assert!(ok.gen_error.is_none(), "gen_error = {:?}", ok.gen_error);
+        assert!(ok.lines.len() > 20, "veio só {} linhas", ok.lines.len());
+        assert!(!handle.busy());
+    }
 
     /// Pede um cálculo com os parâmetros padrão e espera o resultado chegar
     /// pelo `poll()` (até 2 s, de 20 em 20 ms).
