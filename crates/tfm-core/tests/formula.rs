@@ -6,7 +6,7 @@
 //! `_evaluate_formulas_runtime` (TFM_GCODE.py). Valores que dependem só de
 //! `+ - * /` e `math.pi` são comparados com `assert_eq!` (idênticos bit a bit);
 //! os que passam por `asin` (modelo de sobreposição) usam tolerância 1e-9.
-//! O `config/config.json` do repositório é apenas lido (`AppConfig::read`).
+//! A fixture `tests/fixtures/config_exemplo.json` (cópia de um `config.json` real, com 9 pós) é apenas lida (`AppConfig::read`).
 
 use std::path::Path;
 
@@ -15,7 +15,10 @@ use tfm_core::config::AppConfig;
 use tfm_core::formula::{eval, evaluate_block, formula_locals, parse, Expr, FormulaError, Op};
 use tfm_core::params::Params;
 
-const REPO_CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/config.json");
+const FIXTURE_CONFIG: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/config_exemplo.json"
+);
 
 type Vars<'a> = &'a dyn Fn(&str) -> Option<f64>;
 
@@ -52,12 +55,12 @@ fn assert_close(actual: f64, expected: f64, tol: f64, what: &str) {
     );
 }
 
-fn repo_config() -> AppConfig {
+fn fixture_config() -> AppConfig {
     assert!(
-        Path::new(REPO_CONFIG).exists(),
-        "{REPO_CONFIG} deve existir"
+        Path::new(FIXTURE_CONFIG).exists(),
+        "{FIXTURE_CONFIG} deve existir"
     );
-    AppConfig::read(Path::new(REPO_CONFIG))
+    AppConfig::read(Path::new(FIXTURE_CONFIG))
 }
 
 // ---------------------------------------------------------------------------
@@ -521,7 +524,7 @@ fn pending_key_fails_later_when_dependency_errors() {
 
 #[test]
 fn formula_locals_matches_python() {
-    let cfg = repo_config();
+    let cfg = fixture_config();
     let p = Params::default();
     let loc = formula_locals(&p, &cfg.costs);
 
@@ -572,7 +575,7 @@ fn formula_locals_matches_python() {
     assert_eq!(loc["overlap_pass_count"], 10.0);
     assert_eq!(loc["pi"], std::f64::consts::PI);
 
-    // Custos do config.json do repositório.
+    // Custos da fixture config_exemplo.json.
     assert_eq!(loc["gas_argon_brl_m3"], 50.0);
     assert_eq!(loc["labor_brl_hour"], 40.0);
     assert_eq!(loc["machine_brl_hour"], 250.0);
@@ -608,7 +611,7 @@ fn formula_locals_matches_python() {
 
 #[test]
 fn formula_locals_overlap_edge_cases() {
-    let cfg = repo_config();
+    let cfg = fixture_config();
 
     // Superfície plana (diametro 0 -> raio None): sem asin, valores exatos do Python.
     let flat = Params {
@@ -661,11 +664,11 @@ fn formula_locals_overlap_edge_cases() {
 }
 
 // ---------------------------------------------------------------------------
-// Bloco padrão do config.json
+// Bloco padrão do config.json (fixture)
 // ---------------------------------------------------------------------------
 
 /// Valores do Python (`_evaluate_formulas_runtime`) para `Params::default()`
-/// e os custos do `config/config.json` do repositório, na ordem do arquivo.
+/// e os custos da fixture `config_exemplo.json`, na ordem do arquivo.
 /// `effective_step_mm` depende de `asin` (tolerância); os demais são exatos.
 const PYTHON_DEFAULT_RESULTS: [(&str, f64); 20] = [
     ("circumference_mm", 157.07963267948966),
@@ -692,7 +695,7 @@ const PYTHON_DEFAULT_RESULTS: [(&str, f64); 20] = [
 
 #[test]
 fn default_config_formulas_all_evaluate() {
-    let cfg = repo_config();
+    let cfg = fixture_config();
     assert_eq!(cfg.formulas.expressions.len(), 20);
     let loc = formula_locals(&Params::default(), &cfg.costs);
     let out = evaluate_block(&cfg.formulas.expressions, &loc);
@@ -725,8 +728,8 @@ fn default_config_formulas_all_evaluate() {
 #[test]
 fn builtin_default_formulas_all_evaluate() {
     // As 20 expressões embutidas (`AppConfig::default_formulas`) têm o mesmo
-    // texto do config.json, em outra ordem: todas resolvem igualmente.
-    let cfg = repo_config();
+    // texto da fixture, em outra ordem: todas resolvem igualmente.
+    let cfg = fixture_config();
     let formulas = AppConfig::default_formulas();
     assert_eq!(formulas.expressions.len(), 20);
     let loc = formula_locals(&Params::default(), &cfg.costs);

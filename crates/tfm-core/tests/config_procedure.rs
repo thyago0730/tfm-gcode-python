@@ -1,9 +1,11 @@
 //! Testes de integração de `tfm_core::{config, procedure, audit, quality}`.
 //!
-//! Tudo roda em diretórios temporários (`tempfile`). O `config/config.json`
-//! do repositório é apenas lido, nunca gravado, e só recebe asserções
-//! estruturais; os arquivos de qualidade são fixtures próprias (nada em
-//! `data/` é lido).
+//! Tudo roda em diretórios temporários (`tempfile`). As asserções de conteúdo
+//! usam a fixture `tests/fixtures/config_exemplo.json` (cópia de um
+//! `config.json` real, com 9 pós e as 20 fórmulas); o `config/config.json`
+//! do repositório é só carregado, sem asserções sobre o conteúdo, porque é
+//! do usuário e muda pelo app. Os arquivos de qualidade são fixtures próprias
+//! (nada em `data/` é lido).
 //! Os valores esperados vêm do Python original (`config_manager.py`,
 //! `quality_manager.py`, `TFM_GCODE.py`).
 
@@ -20,7 +22,14 @@ use tfm_core::params::{
 use tfm_core::procedure::{load_procedure, save_procedure, ProcedureError};
 use tfm_core::quality::{Maintenance, QualityManager};
 
+/// `config/config.json` do repositório (conteúdo do usuário; só carregado).
 const REPO_CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/config.json");
+/// Cópia exata de um `config.json` real: 9 pós, 20 fórmulas, custos extras em
+/// EUR e `ui.sashes`.
+const FIXTURE_CONFIG: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/config_exemplo.json"
+);
 
 fn read_json(path: &Path) -> Value {
     serde_json::from_str(&fs::read_to_string(path).expect("ler arquivo")).expect("JSON válido")
@@ -141,16 +150,28 @@ fn config_missing_file_saves_full_structure() {
     );
 }
 
+/// O `config/config.json` do repositório carrega sem erro (e sem pânico),
+/// seja qual for o seu conteúdo: ele é do usuário e muda pelo app, então nada
+/// além disso é verificado.
 #[test]
-fn repo_config_json_round_trips() {
-    let original = fs::read_to_string(REPO_CONFIG).expect("config/config.json do repositório");
+fn repo_config_json_loads_without_error() {
+    let path = Path::new(REPO_CONFIG);
+    assert!(path.is_file(), "{REPO_CONFIG} deve existir");
+    let text = fs::read_to_string(path).expect("ler config/config.json");
+    let _: Value = serde_json::from_str(&text).expect("config/config.json deve ser JSON válido");
+    // Só o carregamento: nenhuma asserção sobre pós, fórmulas ou seções.
+    let _cfg = AppConfig::read(path);
+}
+
+#[test]
+fn fixture_config_json_round_trips() {
+    let original = fs::read_to_string(FIXTURE_CONFIG).expect("tests/fixtures/config_exemplo.json");
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.json");
     write(&path, &original);
 
     let cfg = AppConfig::load(&path);
 
-    // Só asserções estruturais: o conteúdo é do usuário e muda pelo app.
     assert_eq!(cfg.formulas.expressions.len(), 20);
     assert_eq!(cfg.powders.len(), 9);
 
@@ -215,8 +236,8 @@ fn default_formulas_match_python_get_default_formulas() {
     assert!(f
         .notes
         .ends_with("Consumo de pó calculado por área e espessura * fator."));
-    // O config.json do repositório contém exatamente essas 20 expressões.
-    let repo: Value = serde_json::from_str(&fs::read_to_string(REPO_CONFIG).unwrap()).unwrap();
+    // A fixture config_exemplo.json contém exatamente essas 20 expressões.
+    let repo: Value = serde_json::from_str(&fs::read_to_string(FIXTURE_CONFIG).unwrap()).unwrap();
     let repo_expr = repo["formulas"]["expressions"].as_object().unwrap();
     assert_eq!(repo_expr.len(), f.expressions.len());
     for (k, expr) in &f.expressions {

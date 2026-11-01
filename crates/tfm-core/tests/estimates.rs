@@ -5,7 +5,7 @@
 //! (TFM_GCODE.py). Os valores esperados foram calculados à mão a partir do
 //! Python; os que dependem do modelo de sobreposição (`asin`) são derivados de
 //! `gcode::common::overlap_metrics` do próprio crate, com a mesma ordem de
-//! operações do Python. O `config/config.json` do repositório é apenas lido.
+//! operações do Python. A fixture `tests/fixtures/config_exemplo.json` (cópia de um `config.json` real) é apenas lida.
 
 use std::f64::consts::PI;
 use std::path::Path;
@@ -18,14 +18,17 @@ use tfm_core::overlap::Uniformity;
 use tfm_core::params::{BolachaTipo, Operation, Params, ProfileShape};
 use tfm_core::quality::QualityManager;
 
-const REPO_CONFIG: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../config/config.json");
+const FIXTURE_CONFIG: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../tests/fixtures/config_exemplo.json"
+);
 
-fn repo_config() -> AppConfig {
+fn fixture_config() -> AppConfig {
     assert!(
-        Path::new(REPO_CONFIG).exists(),
-        "{REPO_CONFIG} deve existir"
+        Path::new(FIXTURE_CONFIG).exists(),
+        "{FIXTURE_CONFIG} deve existir"
     );
-    AppConfig::read(Path::new(REPO_CONFIG))
+    AppConfig::read(Path::new(FIXTURE_CONFIG))
 }
 
 /// Config padrão sem fórmulas: isola a aritmética própria de cada modo
@@ -109,7 +112,7 @@ fn assert_default_costs(e: &Estimates, kg: f64, hours: f64) {
 
 #[test]
 fn espiral_default_time_and_costs() {
-    let e = compute(&params(Operation::Espiral), &repo_config());
+    let e = compute(&params(Operation::Espiral), &fixture_config());
     assert!(is_hhmm(&e.time_hhmm), "time_hhmm = {:?}", e.time_hhmm);
     assert!(e.costs.total > 0.0, "total = {}", e.costs.total);
     assert!(e.time_hours > 0.0);
@@ -120,7 +123,7 @@ fn espiral_default_time_and_costs() {
 
 #[test]
 fn chapa_zero_rotation() {
-    let e = compute(&params(Operation::ChapaPlana), &repo_config());
+    let e = compute(&params(Operation::ChapaPlana), &fixture_config());
     assert_eq!(e.rotation.text, "0.000");
     assert_eq!(e.rotations, "0");
     assert_eq!(e.total_angle, "0");
@@ -132,7 +135,7 @@ fn bolacha_rotation_range_text() {
     let mut p = params(Operation::Bolacha);
     p.diametro = 100.0;
     p.diametro_interno = 20.0;
-    let e = compute(&p, &repo_config());
+    let e = compute(&p, &fixture_config());
     assert!(e.rotation.text.contains(" - "), "{:?}", e.rotation.text);
     // r_ext = 50, r_int = max(10, 4) = 10: 2*pi*50/120 e 2*pi*10/120
     assert_eq!(e.rotation.text, "2.618 - 0.524");
@@ -143,7 +146,7 @@ fn bolacha_rotation_range_text() {
 fn rpm_over_limit_flag() {
     let mut p = params(Operation::Espiral);
     p.velocidade_de_deposicao = 50000.0;
-    let e = compute(&p, &repo_config());
+    let e = compute(&p, &fixture_config());
     assert!(e.rotation.over_limit, "rpm 50000/helice >> 100");
     assert!(!e.pitch.over_limit);
 }
@@ -606,7 +609,7 @@ fn formula_time_fallback_only_when_mode_time_is_zero() {
 
 #[test]
 fn formulas_are_raw_evaluate_block_output() {
-    let cfg = repo_config();
+    let cfg = fixture_config();
     let p = params(Operation::Espiral);
     let e = compute(&p, &cfg);
     let expected = evaluate_block(&cfg.formulas.expressions, &formula_locals(&p, &cfg.costs));
@@ -675,8 +678,8 @@ fn normalized_params_give_identical_results() {
         let mut n = p.clone();
         n.normalize();
         assert_eq!(
-            compute(&p, &repo_config()),
-            compute(&n, &repo_config()),
+            compute(&p, &fixture_config()),
+            compute(&n, &fixture_config()),
             "{op}"
         );
     }
@@ -684,7 +687,7 @@ fn normalized_params_give_identical_results() {
 
 #[test]
 fn never_panics_on_degenerate_params() {
-    let cfg = repo_config();
+    let cfg = fixture_config();
     for op in Operation::ALL {
         let mut p = params(op);
         p.diametro = 0.0;
