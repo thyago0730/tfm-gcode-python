@@ -26,10 +26,10 @@
 //! o triedro. A grade do chão fica no plano XY logo abaixo da peça.
 
 use egui::{
-    pos2, vec2, Align2, CornerRadius, FontId, Id, Painter, PointerButton, Pos2, Rect, Response,
-    Sense, Shape, Slider, Stroke, Ui, Vec2,
+    pos2, vec2, Align2, Color32, CornerRadius, FontId, Id, Mesh, Painter, PointerButton, Pos2,
+    Rect, Response, Sense, Shape, Slider, Stroke, Ui, Vec2,
 };
-use tfm_core::params::{FlatOrientation, Operation, Params, WeldingMode};
+use tfm_core::params::{Direction, FlatOrientation, Operation, Params, WeldingMode};
 use tfm_core::toolpath::{PathPoint, Toolpath, Vec3};
 
 use crate::app::TfmApp;
@@ -41,8 +41,9 @@ pub const SPEEDS: [f32; 10] = [0.5, 1.0, 2.0, 3.0, 5.0, 10.0, 20.0, 30.0, 50.0, 
 pub const BASE_POINTS_PER_SEC: f32 = 100.0;
 /// Acima disto a trajetória é decimada uniformemente para o desenho.
 pub const MAX_DRAW_POINTS: usize = 200_000;
-/// Limite de círculos de "Solda" por quadro.
-const MAX_WELD_DOTS: usize = 20_000;
+/// Limite de trechos com cordão na malha de "Solda" por quadro; acima disso o
+/// percurso é decimado uniformemente.
+const MAX_BEAD_SEGMENTS: usize = 60_000;
 /// Distâncias permitidas da câmera ao alvo (mm).
 pub const MIN_DISTANCE: f32 = 1.0;
 pub const MAX_DISTANCE: f32 = 1.0e6;
@@ -375,6 +376,25 @@ fn sub(a: Vec3, b: Vec3) -> Vec3 {
 
 fn scale(a: Vec3, k: f32) -> Vec3 {
     Vec3::new(a.x * k, a.y * k, a.z * k)
+}
+
+fn cross(a: Vec3, b: Vec3) -> Vec3 {
+    Vec3::new(
+        a.y * b.z - a.z * b.y,
+        a.z * b.x - a.x * b.z,
+        a.x * b.y - a.y * b.x,
+    )
+}
+
+/// `color` escurecida pelo fator `k` (0..=1), mantendo-a opaca.
+fn shade(color: Color32, k: f32) -> Color32 {
+    let k = k.clamp(0.0, 1.0);
+    let [r, g, b, _] = color.to_array();
+    Color32::from_rgb(
+        (r as f32 * k) as u8,
+        (g as f32 * k) as u8,
+        (b as f32 * k) as u8,
+    )
 }
 
 fn dot(a: Vec3, b: Vec3) -> f32 {
@@ -725,6 +745,167 @@ fn view_cube(
     if home_resp.clicked() {
         state.set_preset(ViewPreset::Iso);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Perfil 3D do cordão ("Solda")
+// ---------------------------------------------------------------------------
+
+/// Superfície onde o cordão é depositado: dá a normal em cada ponto.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Surface {
+    /// Peça cilíndrica (eixo X): normal radial, para dentro na operação
+    /// interna.
+    Cylinder { internal: bool },
+    /// Chapa plana: normal +Z.
+    Flat,
+    /// Bolacha (face no plano YZ): normal +X, para o lado da tocha.
+    Bolacha,
+}
+
+impl Surface {
+    fn normal_at(self, pos: Vec3) -> Vec3 {
+        match self {
+            Surface::Cylinder { internal } => {
+                let radial = normalize(Vec3::new(0.0, pos.y, pos.z));
+                let radial = if length(radial) < 0.5 {
+                    Vec3::new(0.0, 0.0, 1.0)
+                } else {
+                    radial
+                };
+                if internal {
+                    scale(radial, -1.0)
+                } else {
+                    radial
+                }
+            }
+            Surface::Flat => Vec3::new(0.0, 0.0, 1.0),
+            Surface::Bolacha => Vec3::new(1.0, 0.0, 0.0),
+        }
+    }
+}
+
+/// Seção do cordão: largura ("Largura Cordão") e altura ("Espessura /
+/// Camada"), sobre a superfície da operação.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct BeadShape {
+    width: f32,
+    height: f32,
+    surface: Surface,
+}
+
+impl BeadShape {
+    fn from_params(p: &Params) -> Self {
+        let surface = match p.welding_mode {
+            WeldingMode::ChapaPlana => Surface::Flat,
+            WeldingMode::Bolacha => Surface::Bolacha,
+            _ => Surface::Cylinder {
+                internal: p.is_internal(),
+            },
+        };
+        BeadShape {
+            width: finite_or(p.largura_cordao, 8.0).max(0.2),
+            height: finite_or(p.espessura_camada, 1.5).max(0.05),
+            surface,
+        }
+    }
+}
+
+/// Malha do perfil 3D do cordão até o ponto `limit`: cada trecho com tocha
+/// ligada vira duas facetas (pé esquerdo→crista e crista→pé direito) com a
+/// largura e a altura do cordão, na cor da camada sombreada por uma luz presa
+/// à câmera. Facetas de costas para a câmera não entram (é o que esconde o
+/// lado de trás da peça). Os trechos saem na ordem do percurso, então o
+/// cordão novo cobre a borda do anterior, como no depósito real. Acima de
+/// [`MAX_BEAD_SEGMENTS`] trechos o percurso é decimado.
+fn bead_mesh(
+    proj: &Projector,
+    tp: &Toolpath,
+    limit: usize,
+    rotation: f32,
+    bead: BeadShape,
+    palette: &Palette,
+) -> Mesh {
+    let mut mesh = Mesh::default();
+    let total = tp.point_count();
+    if total == 0 || limit == 0 {
+        return mesh;
+    }
+    let stride = total.div_ceil(MAX_BEAD_SEGMENTS).max(1);
+    let forward = proj.basis.forward;
+    let light = normalize(add(
+        scale(forward, -1.0),
+        add(scale(proj.basis.up, 0.6), scale(proj.basis.right, -0.4)),
+    ));
+    let half = bead.width * 0.5;
+    let mut consumed = 0usize;
+    for seg in &tp.segments {
+        if consumed >= limit {
+            break;
+        }
+        let n = seg.len().min(limit - consumed);
+        let pts = &seg[..n];
+        let mut k = 0;
+        while k + stride < n {
+            let (a, c) = (&pts[k], &pts[k + stride]);
+            k += stride;
+            if !(a.torch_on && c.torch_on) || a.rapid || c.rapid {
+                continue;
+            }
+            let pa = rotate_part(a.pos, rotation);
+            let pc = rotate_part(c.pos, rotation);
+            let t = normalize(sub(pc, pa));
+            if length(t) < 0.5 {
+                continue;
+            }
+            let nrm = bead.surface.normal_at(pa);
+            let s = normalize(cross(nrm, t));
+            if length(s) < 0.5 {
+                continue;
+            }
+            let color = palette.layer_color(a.layer);
+            let top_a = add(pa, scale(nrm, bead.height));
+            let top_c = add(pc, scale(nrm, bead.height));
+            let left_a = sub(pa, scale(s, half));
+            let left_c = sub(pc, scale(s, half));
+            let right_a = add(pa, scale(s, half));
+            let right_c = add(pc, scale(s, half));
+            let facets = [
+                (
+                    [left_a, top_a, top_c, left_c],
+                    normalize(sub(scale(nrm, half), scale(s, bead.height))),
+                ),
+                (
+                    [top_a, right_a, right_c, top_c],
+                    normalize(add(scale(nrm, half), scale(s, bead.height))),
+                ),
+            ];
+            for (quad, facet_normal) in facets {
+                if dot(facet_normal, forward) > 0.05 {
+                    continue;
+                }
+                let k = 0.45 + 0.55 * dot(facet_normal, light).max(0.0);
+                let col = shade(color, k);
+                let screen = [
+                    proj.project(quad[0]),
+                    proj.project(quad[1]),
+                    proj.project(quad[2]),
+                    proj.project(quad[3]),
+                ];
+                let [Some(s0), Some(s1), Some(s2), Some(s3)] = screen else {
+                    continue;
+                };
+                let base = mesh.vertices.len() as u32;
+                for p in [s0, s1, s2, s3] {
+                    mesh.colored_vertex(p, col);
+                }
+                mesh.add_triangle(base, base + 1, base + 2);
+                mesh.add_triangle(base, base + 2, base + 3);
+            }
+        }
+        consumed += n;
+    }
+    mesh
 }
 
 // ---------------------------------------------------------------------------
@@ -1150,8 +1331,9 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     let proj = Projector::new(&state.cam, rect);
     draw_grid(&painter, &proj, &bounds, &palette);
     if let Some(r) = result {
-        draw_reference(&painter, &proj, &r.params, toolpath, rotation, &palette);
+        draw_reference(&painter, &proj, &r.params, rotation, &palette);
     }
+    let bead = result.map(|r| BeadShape::from_params(&r.params));
     let picked = match toolpath {
         Some(tp) => {
             let stick = (bounds.extent() * 0.08).max(2.0);
@@ -1172,6 +1354,7 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
                 pointer,
                 stick,
                 rotation,
+                bead,
             )
         }
         None => {
@@ -1256,7 +1439,9 @@ fn toolbar(ui: &mut Ui, state: &mut ViewState, total: usize) {
         ui.checkbox(&mut state.sim.show_trace, "Traçado")
             .on_hover_text("Mostrar a trajetória da tocha");
         ui.checkbox(&mut state.sim.show_weld, "Solda")
-            .on_hover_text("Marcar os pontos com a tocha ligada");
+            .on_hover_text(
+                "Mostrar o cordão depositado em 3D (largura do cordão e altura da camada)",
+            );
         ui.separator();
         ui.label("Velocidade:");
         let mut idx = state.sim.speed_index();
@@ -1326,16 +1511,16 @@ fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, palette: &Palette)
     }
 }
 
-/// Silhueta da peça em cinza fino: cilindro (dois círculos, 4 geratrizes e a
-/// linha de centro do eixo A passando [`AXIS_OVERHANG`] das faces), chapa
-/// (retângulo na altura da tocha) ou bolacha (anéis interno/externo).
-/// `rotation` é o ângulo A atual da peça: as geratrizes do cilindro giram
-/// com ela (ver [`rotate_part`]); chapa e bolacha ignoram o valor.
+/// Silhueta da peça em cinza fino: cilindro com o comprimento a revestir no
+/// sentido da solda (dois círculos, 4 geratrizes e a linha de centro do eixo
+/// A passando [`AXIS_OVERHANG`] das faces), chapa (retângulo na altura da
+/// tocha) ou bolacha (anéis interno/externo). `rotation` é o ângulo A atual
+/// da peça: as geratrizes do cilindro giram com ela (ver [`rotate_part`]);
+/// chapa e bolacha ignoram o valor.
 fn draw_reference(
     painter: &Painter,
     proj: &Projector,
     p: &Params,
-    toolpath: Option<&Toolpath>,
     rotation: f32,
     palette: &Palette,
 ) {
@@ -1385,9 +1570,11 @@ fn draw_reference(
         _ => {
             let r = cylinder_radius(p);
             let len = finite_or(p.comprimento_revestir, 0.0).max(1.0);
-            let (x0, x1) = match toolpath {
-                Some(tp) if tp.max.x - tp.min.x > 1e-3 => (tp.min.x, tp.max.x),
-                _ => (0.0, len),
+            // A peça é o trecho a revestir, a partir de X0 no sentido da
+            // solda; o percurso pode ir além (aproximações, apagamento).
+            let (x0, x1) = match p.direcao_soldagem {
+                Direction::EsquerdaDireita => (0.0, len),
+                Direction::DireitaEsquerda => (-len, 0.0),
             };
             draw_circle(painter, proj, x0, r, stroke);
             draw_circle(painter, proj, x1, r, stroke);
@@ -1444,8 +1631,10 @@ impl Style {
 /// `rotation` é o ângulo A atual da peça: cada ponto é girado por
 /// [`rotate_part`] antes de ser projetado, de modo que o ponto sendo
 /// depositado fique no topo, sob a tocha (0.0 em chapa plana e bolacha).
-/// `pointer` é a posição de um clique neste quadro; devolve a linha do ponto
-/// mais próximo dele, se ficou a menos de [`PICK_RADIUS`].
+/// Com "Solda" ligada e `bead` presente, o perfil 3D do cordão
+/// ([`bead_mesh`]) é desenhado antes do traçado. `pointer` é a posição de um
+/// clique neste quadro; devolve a linha do ponto mais próximo dele, se ficou
+/// a menos de [`PICK_RADIUS`].
 #[allow(clippy::too_many_arguments)]
 fn draw_path(
     painter: &Painter,
@@ -1457,15 +1646,21 @@ fn draw_path(
     pointer: Option<Pos2>,
     stick: f32,
     rotation: f32,
+    bead: Option<BeadShape>,
 ) -> Option<usize> {
     let total = tp.point_count();
     if total == 0 {
         return None;
     }
     let step = decimation_step(total);
-    let weld_stride = total.div_ceil(MAX_WELD_DOTS).max(step);
     let limit = draw_limit(&state.sim, total);
     let (show_trace, show_weld) = (state.sim.show_trace, state.sim.show_weld);
+    if let (true, Some(bead)) = (show_weld, bead) {
+        let mesh = bead_mesh(proj, tp, limit, rotation, bead, palette);
+        if !mesh.is_empty() {
+            painter.add(Shape::mesh(mesh));
+        }
+    }
 
     let mut best: Option<(f32, usize)> = None;
     let mut selected_at: Option<Pos2> = None;
@@ -1499,13 +1694,6 @@ fn draw_path(
                     selected_at = Some(s);
                 }
                 torch_at = Some((pos, s));
-                if show_weld
-                    && pt.torch_on
-                    && !pt.rapid
-                    && (consumed + k).is_multiple_of(weld_stride)
-                {
-                    painter.circle_filled(s, 1.5, palette.layer_color(pt.layer));
-                }
             }
             if run != Some(style) {
                 // O movimento até este ponto tem o estilo deste ponto: o
@@ -2052,7 +2240,7 @@ mod tests {
         let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
             draw_grid(&painter, &proj, &bounds, &palette);
-            draw_reference(&painter, &proj, &params, Some(&tp), 0.0, &palette);
+            draw_reference(&painter, &proj, &params, 0.0, &palette);
             picked = draw_path(
                 &painter,
                 &proj,
@@ -2063,6 +2251,7 @@ mod tests {
                 click,
                 5.0,
                 0.0,
+                None,
             );
         });
         // Sem renderizador ninguém aplica o atlas de fontes: o egui exige
@@ -2355,6 +2544,153 @@ mod tests {
         }
     }
 
+    /// A silhueta do cilindro tem o comprimento a revestir, no sentido da
+    /// solda, mesmo quando o percurso vai além (o apagamento da oscilação
+    /// quadrada anda 100 mm em X).
+    #[test]
+    fn reference_cylinder_spans_the_coated_length() {
+        let palette = Palette::light();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        for (direction, x0, x1) in [
+            (Direction::EsquerdaDireita, 0.0, 50.0),
+            (Direction::DireitaEsquerda, -50.0, 0.0),
+        ] {
+            let params = Params {
+                direcao_soldagem: direction,
+                ..Params::default()
+            };
+            let mut cam = Camera::default();
+            cam.fit(Vec3::new(-60.0, -30.0, -30.0), Vec3::new(160.0, 30.0, 30.0));
+            let proj = Projector::new(&cam, rect);
+            let want = |x: f32| {
+                proj.project(Vec3::new(x, 25.0, 0.0))
+                    .unwrap_or_else(|| panic!("ponto fora da vista"))
+            };
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+                let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+                draw_reference(&painter, &proj, &params, 0.0, &palette);
+            });
+            output.textures_delta.clear();
+            let mut segments = Vec::new();
+            for clipped in &output.shapes {
+                collect_segments(&clipped.shape, &mut segments);
+            }
+            let has = |a: Pos2, b: Pos2| {
+                segments.iter().any(|(pts, _)| {
+                    (pts[0].distance(a) < 1.0 && pts[1].distance(b) < 1.0)
+                        || (pts[0].distance(b) < 1.0 && pts[1].distance(a) < 1.0)
+                })
+            };
+            assert!(
+                has(want(x0), want(x1)),
+                "{direction:?}: geratriz de X{x0} a X{x1} ausente"
+            );
+            assert!(
+                !has(want(0.0), want(150.0)),
+                "{direction:?}: a silhueta seguiu o percurso até X150"
+            );
+        }
+    }
+
+    /// Percurso mínimo para o perfil do cordão: três pontos sobre o topo de
+    /// um cilindro de raio 25, tocha ligada, andando em +X.
+    fn bead_path(torch_on: bool) -> Toolpath {
+        let pt = |x: f32| PathPoint {
+            pos: Vec3::new(x, 0.0, 25.0),
+            line_idx: 0,
+            radius: 25.0,
+            a_deg: 0.0,
+            feed: 100.0,
+            torch_on,
+            rapid: false,
+            layer: 0,
+        };
+        Toolpath {
+            segments: vec![vec![pt(0.0), pt(10.0), pt(20.0)]],
+            min: Vec3::new(0.0, -25.0, -25.0),
+            max: Vec3::new(20.0, 25.0, 25.0),
+            layer_count: 1,
+        }
+    }
+
+    /// Cada trecho com tocha ligada vira duas facetas (pé esquerdo→crista e
+    /// crista→pé direito); a que fica de costas para a câmera é descartada.
+    #[test]
+    fn bead_mesh_has_two_shaded_facets_per_welding_segment() {
+        let palette = Palette::light();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let bead = BeadShape {
+            width: 8.0,
+            height: 1.5,
+            surface: Surface::Cylinder { internal: false },
+        };
+        let tp = bead_path(true);
+        // Vista de topo: as duas facetas de cada trecho olham para a câmera.
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Topo);
+        cam.target = Vec3::new(10.0, 0.0, 25.0);
+        cam.distance = 200.0;
+        let proj = Projector::new(&cam, rect);
+        let mesh = bead_mesh(&proj, &tp, 3, 0.0, bead, &palette);
+        assert_eq!(
+            mesh.vertices.len(),
+            16,
+            "2 trechos × 2 facetas × 4 vértices"
+        );
+        assert_eq!(mesh.indices.len(), 24, "2 triângulos por faceta");
+        // Só o primeiro trecho quando a simulação parou no segundo ponto.
+        let partial = bead_mesh(&proj, &tp, 2, 0.0, bead, &palette);
+        assert_eq!(partial.vertices.len(), 8);
+        // De frente (câmera em -Y) a faceta voltada para +Y fica de costas.
+        let mut side = Camera::default();
+        side.preset(ViewPreset::Frente);
+        side.target = Vec3::new(10.0, 0.0, 25.0);
+        side.distance = 200.0;
+        let proj_side = Projector::new(&side, rect);
+        let mesh_side = bead_mesh(&proj_side, &tp, 3, 0.0, bead, &palette);
+        assert_eq!(mesh_side.vertices.len(), 8, "uma faceta por trecho");
+        // Tocha desligada não deposita nada.
+        let off = bead_mesh(&proj, &bead_path(false), 3, 0.0, bead, &palette);
+        assert!(off.vertices.is_empty());
+    }
+
+    /// Com "Solda" ligada a trajetória vem com uma malha (o perfil 3D do
+    /// cordão) em vez de pontinhos.
+    #[test]
+    fn draw_path_with_weld_emits_a_bead_mesh() {
+        let (params, tp, cam, rect) = spiral_scene();
+        let palette = Palette::light();
+        let proj = Projector::new(&cam, rect);
+        let mut state = ViewState {
+            cam,
+            ..Default::default()
+        };
+        state.sim.show_weld = true;
+        let bead = Some(BeadShape::from_params(&params));
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+            draw_path(
+                &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, 0.0, bead,
+            );
+        });
+        output.textures_delta.clear();
+        let mut mesh_vertices = 0usize;
+        for clipped in &output.shapes {
+            count_mesh_vertices(&clipped.shape, &mut mesh_vertices);
+        }
+        assert!(mesh_vertices > 0, "nenhuma malha do cordão foi desenhada");
+    }
+
+    fn count_mesh_vertices(shape: &Shape, out: &mut usize) {
+        match shape {
+            Shape::Vec(v) => v.iter().for_each(|s| count_mesh_vertices(s, out)),
+            Shape::Mesh(m) => *out += m.vertices.len(),
+            _ => {}
+        }
+    }
+
     /// A silhueta do cilindro inclui a linha de centro do eixo A, passando um
     /// pouco das duas faces.
     #[test]
@@ -2372,7 +2708,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
-            draw_reference(&painter, &proj, &params, Some(&tp), 0.0, &palette);
+            draw_reference(&painter, &proj, &params, 0.0, &palette);
         });
         output.textures_delta.clear();
         let mut segments = Vec::new();
@@ -2532,7 +2868,7 @@ mod tests {
         let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
             draw_path(
-                &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, cur.a_deg,
+                &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, cur.a_deg, None,
             );
             overlay(&painter, rect, Some(&tp), Some(&cur), &palette);
         });
