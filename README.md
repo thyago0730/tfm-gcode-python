@@ -23,6 +23,8 @@ Requisito: [Rust estável](https://rustup.rs) (`rust-toolchain.toml` fixa o cana
 cargo build --release
 ```
 
+Para testar com um clique, `scripts\run_app.cmd` (ou `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\run_app.ps1`) compila em release, atualiza `dist\TFM_GCODE.exe` (fechando uma instância aberta de lá) e abre o programa; o exe em `dist\` usa o `config\config.json`, os procedimentos e os logs da raiz do repositório. Opções: `-SemAbrir` (só compila e copia) e `-SemBuild` (só abre).
+
 O executável fica em `target/release/TFM_GCODE.exe` (cerca de 18 MB, sem dependências externas). Em release ele abre só a janela, sem console; em debug (`cargo run -p tfm-app`) o console mostra o log, controlado por `RUST_LOG` (padrão `warn,tfm_app=info,tfm_core=info`).
 
 ## Testes
