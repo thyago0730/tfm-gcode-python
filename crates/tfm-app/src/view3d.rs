@@ -3307,6 +3307,42 @@ mod tests {
         assert!(!has_floor(None), "sem peça ainda, sem plano");
     }
 
+    /// A aba inteira, com a peça calculada de verdade: é o `view_ui` que decide
+    /// o plano pela operação do resultado. Sem resultado ainda, nada de plano.
+    #[test]
+    fn view_tab_draws_the_floor_only_under_parts_lying_down() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut app = TfmApp::headless(dir.path());
+        let muted = app.palette.muted;
+        let grid = [0.25, 0.5].map(|k| muted.gamma_multiply(k).to_array());
+        let grid_lines = |app: &TfmApp| {
+            let ctx = egui::Context::default();
+            let mut state = ViewState::default();
+            let raw = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(raw, |ui| {
+                view_ui(app, ui, &mut state);
+            });
+            output.textures_delta.clear();
+            let mut segments = Vec::new();
+            for clipped in &output.shapes {
+                collect_segments(&clipped.shape, &mut segments);
+            }
+            segments.iter().filter(|(_, c)| grid.contains(c)).count()
+        };
+        assert_eq!(grid_lines(&app), 0, "sem peça calculada");
+        for op in Operation::ALL {
+            let mut params = Params::default();
+            params.apply_operation(op);
+            app.result = Some(crate::compute::compute_all(params, &app.cfg, 1));
+            let lying = matches!(op, Operation::ChapaPlana | Operation::Bolacha);
+            let lines = grid_lines(&app);
+            assert_eq!(lines > 0, lying, "plano em {op:?}: {lines} linhas");
+        }
+    }
+
     /// A bolacha fica deitada na mesa, na altura da tocha, com a face para cima.
     #[test]
     fn bolacha_lies_on_the_table() {
