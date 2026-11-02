@@ -11,7 +11,7 @@
 use std::fs;
 
 use serde_json::Value;
-use tfm_core::params::{Params, WeldingMode};
+use tfm_core::params::{Params, Rotation, WeldingMode};
 use tfm_core::toolpath::{
     build_toolpath, count_motions, oscillation_series, step_distances, temporal_series, PathPoint,
     Series, Toolpath, Vec3,
@@ -246,26 +246,26 @@ fn bolacha_maps_x_to_radius() {
     let points = all_points(&tp);
     assert_eq!(lines[points[0].line_idx], "G90 G0 Y0 (Ir ao Y=0 peca)");
 
-    // raio = X da máquina; o ponto 3D fica na face: hypot(y, z) == |raio|.
+    // raio = X da máquina; a peça está deitada: hypot(x, y) == |raio|.
     for p in &points {
         let what = format!("raio da linha {}", p.line_idx);
-        assert_close(p.pos.y.hypot(p.pos.z), p.radius.abs(), 1e-3, &what);
+        assert_close(p.pos.x.hypot(p.pos.y), p.radius.abs(), 1e-3, &what);
     }
-    // eixo = Z da máquina: cordão a Z = 12, afastamento de segurança a Z = 42.
+    // altura = Z da máquina: cordão a Z = 12, afastamento de segurança a Z = 42.
     let on: Vec<&PathPoint> = points.iter().copied().filter(|p| p.torch_on).collect();
     assert_eq!(on.len(), 722);
-    assert!(on.iter().all(|p| p.pos.x == 12.0 && !p.rapid));
-    assert_eq!(tp.min.x, 0.0);
-    assert_eq!(tp.max.x, 42.0);
+    assert!(on.iter().all(|p| p.pos.z == 12.0 && !p.rapid));
+    assert_eq!(tp.min.z, 0.0);
+    assert_eq!(tp.max.z, 42.0);
 
-    // `G00 X4.000 A0.000` a 42 mm: raio 4, ângulo 0 -> (42, 4·cos 90°, 4·sin 90°).
+    // `G00 X4.000 A0.000` a 42 mm: raio 4, ângulo 0 -> (4, 0, 42).
     let approach = &tp.segments[2][0];
     assert_eq!(approach.radius, 4.0);
     assert_eq!(approach.a_deg, 0.0);
     assert!(approach.rapid);
-    assert_eq!(approach.pos.x, 42.0);
+    assert_close(approach.pos.x, 4.0, 1e-5, "x da aproximação");
     assert_close(approach.pos.y, 0.0, 1e-5, "y da aproximação");
-    assert_close(approach.pos.z, 4.0, 1e-5, "z da aproximação");
+    assert_eq!(approach.pos.z, 42.0);
 
     // Espiral: raio nunca diminui; cada G01 de 10° gera 1 interpolado (t = 0.5).
     let weld = &tp.segments[3];
@@ -284,7 +284,7 @@ fn bolacha_maps_x_to_radius() {
     let last = weld.last().expect("trecho não vazio");
     assert_eq!(last.radius, 50.0);
     assert_close(last.a_deg, 3614.584, 1e-3, "A final");
-    assert_eq!(last.pos.x, 12.0);
+    assert_eq!(last.pos.z, 12.0);
     assert!(!last.torch_on);
     let max_radius = points.iter().map(|p| p.radius).fold(f32::MIN, f32::max);
     assert_eq!(max_radius, 50.0);
@@ -572,18 +572,40 @@ fn bolacha_breaks_only_on_rapid_and_interpolates() {
     let tp = build_toolpath(&src, &p);
     assert_eq!(segment_sizes(&tp), vec![3, 2]);
     let seg = &tp.segments[0];
-    // interpolado em t = 0.5: raio 7, eixo 12.75, A 6
+    // interpolado em t = 0.5: raio 7, altura 12.75, A 6
     assert_eq!(seg[1].radius, 7.0);
-    assert_eq!(seg[1].pos.x, 12.75);
+    assert_eq!(seg[1].pos.z, 12.75);
     assert_eq!(seg[1].a_deg, 6.0);
     assert_eq!(seg[1].line_idx, 1);
     assert_eq!(seg[2].radius, 10.0);
-    assert_eq!(seg[2].pos.x, 13.5);
-    // (eixo, r·cos(a + 90°), r·sin(a + 90°)) em a = 12°, r = 10
-    assert_close(seg[2].pos.y, -2.0791, 1e-3, "y em 12°");
-    assert_close(seg[2].pos.z, 9.7815, 1e-3, "z em 12°");
+    assert_eq!(seg[2].pos.z, 13.5);
+    // (r·cos a, r·sin a, altura) em a = 12°, r = 10
+    assert_close(seg[2].pos.x, 9.7815, 1e-3, "x em 12°");
+    assert_close(seg[2].pos.y, 2.0791, 1e-3, "y em 12°");
     assert_eq!(tp.segments[1][1].a_deg, 17.0);
     assert_eq!(tp.segments[1][1].radius, 20.0);
+}
+
+/// Soma do produto vetorial entre pontos seguidos do cordão: positiva quando
+/// ele avança no sentido anti-horário visto de cima.
+fn turn_seen_from_above(tp: &Toolpath) -> f32 {
+    let on: Vec<&PathPoint> = tp.points().filter(|p| p.torch_on).collect();
+    on.windows(2)
+        .map(|w| w[0].pos.x * w[1].pos.y - w[1].pos.x * w[0].pos.y)
+        .sum()
+}
+
+/// A tocha fica parada e quem gira é a mesa: com a mesa no sentido horário, o
+/// cordão avança no sentido anti-horário sobre a peça, visto de cima.
+#[test]
+fn bolacha_seam_runs_against_the_table() {
+    let (lines, mut params) = golden("bolacha_espiral");
+    params.sentido_rotacao = Rotation::Horaria;
+    assert!(turn_seen_from_above(&build_toolpath(&lines, &params)) > 0.0);
+
+    params.sentido_rotacao = Rotation::Antihoraria;
+    let contrario = tfm_core::gcode::generate(&params).expect("gera a bolacha");
+    assert!(turn_seen_from_above(&build_toolpath(&contrario, &params)) < 0.0);
 }
 
 #[test]

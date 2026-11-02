@@ -2,8 +2,9 @@
 //!
 //! Renderização por software com o `Painter` do egui, sem GPU própria: uma
 //! câmera orbital com perspectiva simples ([`Camera`]) projeta a cena e a
-//! aba desenha, nesta ordem, a grade do chão, os eixos XYZ, a silhueta da
-//! peça (cilindro, chapa ou bolacha) e a trajetória colorida por camada.
+//! aba desenha, nesta ordem, a grade do chão (só sob a peça deitada), os eixos
+//! XYZ, a silhueta da peça (cilindro, chapa ou bolacha) e a trajetória colorida
+//! por camada.
 //! A simulação ([`Sim`]) desenha o percurso até `progress` e marca a tocha.
 //! No canto superior direito fica o cubo de orientação ([`view_cube`]), como
 //! o ViewCube do Inventor: as faces nomeadas giram com a câmera, clicar numa
@@ -22,8 +23,10 @@
 //! assim o menu "Simulação" aciona presets e ▶ ⏸ ⏹ sem tocar no `app.rs`.
 //!
 //! Convenção da cena, a mesma do `tfm_core::toolpath`: X é o eixo da peça
-//! (axial), Z aponta para cima (altura da tocha na chapa plana) e Y completa
-//! o triedro. A grade do chão fica no plano XY logo abaixo da peça.
+//! (axial) no cilindro e o raio na bolacha, Z aponta para cima (altura da tocha
+//! na chapa e na bolacha) e Y completa o triedro. Chapa e bolacha ficam
+//! deitadas, com a grade do chão logo abaixo; o cilindro fica na horizontal,
+//! sem grade.
 
 use egui::{
     pos2, vec2, Align2, Color32, CornerRadius, FontId, Id, Mesh, Painter, PointerButton, Pos2,
@@ -63,6 +66,8 @@ const WHEEL_ZOOM: f32 = 0.0025;
 const PICK_RADIUS: f32 = 10.0;
 /// Segmentos de reta por círculo da silhueta.
 const CIRCLE_SEGMENTS: usize = 48;
+/// Dois trechos do cordão só dividem a aresta da emenda abaixo de 45° entre eles.
+const BEAD_JOINT_COS: f32 = std::f32::consts::FRAC_1_SQRT_2;
 /// Quanto a linha de centro do eixo A passa de cada face do cilindro, como
 /// fração do comprimento.
 const AXIS_OVERHANG: f32 = 0.1;
@@ -960,10 +965,8 @@ enum Surface {
     /// Peça cilíndrica (eixo X): normal radial, para dentro na operação
     /// interna.
     Cylinder { internal: bool },
-    /// Chapa plana: normal +Z.
+    /// Face deitada, virada para a tocha (chapa plana e bolacha): normal +Z.
     Flat,
-    /// Bolacha (face no plano YZ): normal +X, para o lado da tocha.
-    Bolacha,
 }
 
 impl Surface {
@@ -983,7 +986,6 @@ impl Surface {
                 }
             }
             Surface::Flat => Vec3::new(0.0, 0.0, 1.0),
-            Surface::Bolacha => Vec3::new(1.0, 0.0, 0.0),
         }
     }
 }
@@ -1003,8 +1005,7 @@ struct BeadShape {
 impl BeadShape {
     fn from_params(p: &Params) -> Self {
         let surface = match p.welding_mode {
-            WeldingMode::ChapaPlana => Surface::Flat,
-            WeldingMode::Bolacha => Surface::Bolacha,
+            WeldingMode::ChapaPlana | WeldingMode::Bolacha => Surface::Flat,
             _ => Surface::Cylinder {
                 internal: p.is_internal(),
             },
@@ -1017,6 +1018,16 @@ impl BeadShape {
             // Na chapa o cordão para antes da borda e termina no apagamento.
             include_tail: p.fechamento_uniforme || p.welding_mode == WeldingMode::ChapaPlana,
         }
+    }
+}
+
+/// Tangente do cordão na emenda entre um trecho (`own`) e o vizinho. Na curva é
+/// a média dos dois, para eles dividirem a aresta e o lado de fora não abrir em
+/// cunha. No canto vivo, ou sem vizinho, o trecho fica com a sua.
+fn joint_tangent(own: Vec3, neighbor: Option<Vec3>) -> Vec3 {
+    match neighbor {
+        Some(t) if dot(own, t) > BEAD_JOINT_COS => normalize(add(own, t)),
+        _ => own,
     }
 }
 
@@ -1047,7 +1058,9 @@ fn bead_mesh(
         add(scale(proj.basis.up, 0.6), scale(proj.basis.right, -0.4)),
     ));
     let half = bead.width * 0.5;
-    let deposits = |pt: &PathPoint| pt.torch_on || (bead.include_tail && pt.extinguishing);
+    let deposits =
+        |pt: &PathPoint| !pt.rapid && (pt.torch_on || (bead.include_tail && pt.extinguishing));
+    let place = |pt: &PathPoint| rotate_part(pt.pos, rotation);
     let mut consumed = 0usize;
     for seg in &tp.segments {
         if consumed >= limit {
@@ -1055,31 +1068,35 @@ fn bead_mesh(
         }
         let n = seg.len().min(limit - consumed);
         let pts = &seg[..n];
+        // Direção do trecho entre dois pontos, se ele deposita material.
+        let direction = |i: usize, j: usize| {
+            let (a, b) = (pts.get(i)?, pts.get(j)?);
+            let t = normalize(sub(place(b), place(a)));
+            (deposits(a) && deposits(b) && length(t) >= 0.5).then_some(t)
+        };
         let mut k = 0;
         while k + stride < n {
-            let (a, c) = (&pts[k], &pts[k + stride]);
-            k += stride;
-            if !(deposits(a) && deposits(c)) || a.rapid || c.rapid {
-                continue;
-            }
-            let pa = rotate_part(a.pos, rotation);
-            let pc = rotate_part(c.pos, rotation);
-            let t = normalize(sub(pc, pa));
-            if length(t) < 0.5 {
-                continue;
-            }
+            let (i, j) = (k, k + stride);
+            k = j;
+            let Some(t) = direction(i, j) else { continue };
+            let (pa, pc) = (place(&pts[i]), place(&pts[j]));
             let nrm = bead.surface.normal_at(pa);
+            let nrm_c = bead.surface.normal_at(pc);
             let s = normalize(cross(nrm, t));
-            if length(s) < 0.5 {
+            let before = i.checked_sub(stride).and_then(|h| direction(h, i));
+            let s_a = normalize(cross(nrm, joint_tangent(t, before)));
+            let after = direction(j, j + stride);
+            let s_c = normalize(cross(nrm_c, joint_tangent(t, after)));
+            if [s, s_a, s_c].iter().any(|v| length(*v) < 0.5) {
                 continue;
             }
-            let color = palette.layer_color(a.layer);
+            let color = palette.layer_color(pts[i].layer);
             let top_a = add(pa, scale(nrm, bead.height));
-            let top_c = add(pc, scale(nrm, bead.height));
-            let left_a = sub(pa, scale(s, half));
-            let left_c = sub(pc, scale(s, half));
-            let right_a = add(pa, scale(s, half));
-            let right_c = add(pc, scale(s, half));
+            let top_c = add(pc, scale(nrm_c, bead.height));
+            let left_a = sub(pa, scale(s_a, half));
+            let left_c = sub(pc, scale(s_c, half));
+            let right_a = add(pa, scale(s_a, half));
+            let right_c = add(pc, scale(s_c, half));
             let facets = [
                 (
                     [left_a, top_a, top_c, left_c],
@@ -1473,10 +1490,10 @@ fn reference_bounds(p: &Params) -> Bounds {
         }
         WeldingMode::Bolacha => {
             let r = (finite_or(p.diametro, 0.0) * 0.5).max(1.0);
-            let x = finite_or(p.afastamento_tocha, 0.0);
+            let z = finite_or(p.afastamento_tocha, 0.0);
             Bounds {
-                min: Vec3::new(x, -r, -r),
-                max: Vec3::new(x, r, r),
+                min: Vec3::new(-r, -r, z),
+                max: Vec3::new(r, r, z),
             }
         }
         _ => {
@@ -1608,7 +1625,8 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     let rotation = current.map_or(0.0, |pt| pt.a_deg);
 
     let proj = Projector::new(&state.cam, rect);
-    draw_grid(&painter, &proj, &bounds, &palette);
+    let floor = has_floor(result.map(|r| &r.params));
+    draw_scene_base(&painter, &proj, &bounds, floor, &palette);
     if let Some(r) = result {
         draw_reference(&painter, &proj, &r.params, rotation, &palette);
     }
@@ -1914,13 +1932,30 @@ fn timeline(
     bar
 }
 
-/// Grade do chão (plano XY logo abaixo da peça) e o triedro XYZ na origem da
-/// máquina: nas peças que giram é o centro do eixo A (X0 na linha de centro);
-/// na chapa plana, o canto X0 Y0 na altura zero.
-fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, palette: &Palette) {
-    let extent = b.extent();
-    let spacing = nice_step(extent / 8.0);
-    let n = ((extent * 0.75 / spacing).ceil() as i32).clamp(4, 40);
+/// A cena tem plano do chão? Só sob a peça deitada (chapa plana e bolacha): o
+/// cilindro fica na horizontal, entre os eixos da máquina.
+fn has_floor(p: Option<&Params>) -> bool {
+    p.is_some_and(|p| !part_rotates(p))
+}
+
+/// Base da cena: o plano do chão, quando há, e o triedro XYZ.
+fn draw_scene_base(
+    painter: &Painter,
+    proj: &Projector,
+    b: &Bounds,
+    floor: bool,
+    palette: &Palette,
+) {
+    let spacing = nice_step(b.extent() / 8.0);
+    if floor {
+        draw_grid(painter, proj, b, spacing, palette);
+    }
+    draw_axes(painter, proj, spacing, palette);
+}
+
+/// Grade do chão: plano XY logo abaixo da peça, em passos de `spacing` mm.
+fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, spacing: f32, palette: &Palette) {
+    let n = ((b.extent() * 0.75 / spacing).ceil() as i32).clamp(4, 40);
     let c = b.center();
     let cx = (c.x / spacing).round() * spacing;
     let cy = (c.y / spacing).round() * spacing;
@@ -1939,7 +1974,12 @@ fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, palette: &Palette)
             painter.line_segment(seg, stroke);
         }
     }
+}
 
+/// Triedro XYZ na origem da máquina: nas peças que giram é o centro do eixo A
+/// (X0 na linha de centro); na bolacha, o centro da mesa na altura zero; na
+/// chapa plana, o canto X0 Y0 na altura zero.
+fn draw_axes(painter: &Painter, proj: &Projector, spacing: f32, palette: &Palette) {
     let origin = Vec3::default();
     let len = spacing * 2.0;
     let axes = [
@@ -1966,9 +2006,9 @@ fn draw_grid(painter: &Painter, proj: &Projector, b: &Bounds, palette: &Palette)
 /// Silhueta da peça em cinza fino: cilindro com o comprimento a revestir no
 /// sentido da solda (dois círculos, 4 geratrizes e a linha de centro do eixo
 /// A passando [`AXIS_OVERHANG`] das faces), chapa (retângulo na altura da
-/// tocha) ou bolacha (anéis interno/externo). `rotation` é o ângulo A atual
-/// da peça: as geratrizes do cilindro giram com ela (ver [`rotate_part`]);
-/// chapa e bolacha ignoram o valor.
+/// tocha) ou bolacha (anéis interno/externo, deitados na altura da tocha).
+/// `rotation` é o ângulo A atual da peça: as geratrizes do cilindro giram com
+/// ela (ver [`rotate_part`]); chapa e bolacha ignoram o valor.
 fn draw_reference(
     painter: &Painter,
     proj: &Projector,
@@ -1997,11 +2037,13 @@ fn draw_reference(
             }
         }
         WeldingMode::Bolacha => {
-            let x = finite_or(p.afastamento_tocha, 0.0);
+            let z = finite_or(p.afastamento_tocha, 0.0);
             let r_out = finite_or(p.diametro, 0.0) * 0.5;
             let r_in = finite_or(p.diametro_interno, 0.0) * 0.5;
             if r_out > 0.0 {
-                draw_circle(painter, proj, x, r_out, stroke);
+                draw_circle(painter, proj, stroke, |c, s| {
+                    Vec3::new(r_out * c, r_out * s, z)
+                });
             }
             let inner = if r_in > 0.0 && r_in < r_out {
                 r_in
@@ -2009,21 +2051,23 @@ fn draw_reference(
                 0.0
             };
             if inner > 0.0 {
-                draw_circle(painter, proj, x, inner, stroke);
+                draw_circle(painter, proj, stroke, |c, s| {
+                    Vec3::new(inner * c, inner * s, z)
+                });
             }
             for k in 0..4 {
                 let (s, c) = (k as f32 * std::f32::consts::FRAC_PI_2).sin_cos();
                 line(
-                    Vec3::new(x, inner * c, inner * s),
-                    Vec3::new(x, r_out * c, r_out * s),
+                    Vec3::new(inner * c, inner * s, z),
+                    Vec3::new(r_out * c, r_out * s, z),
                 );
             }
         }
         _ => {
             let r = cylinder_radius(p);
             let (x0, x1) = cylinder_span(p);
-            draw_circle(painter, proj, x0, r, stroke);
-            draw_circle(painter, proj, x1, r, stroke);
+            draw_circle(painter, proj, stroke, |c, s| Vec3::new(x0, r * c, r * s));
+            draw_circle(painter, proj, stroke, |c, s| Vec3::new(x1, r * c, r * s));
             for k in 0..4 {
                 let (s, c) = (k as f32 * std::f32::consts::FRAC_PI_2).sin_cos();
                 line(
@@ -2041,14 +2085,13 @@ fn draw_reference(
     }
 }
 
-/// Círculo de raio `r` no plano YZ, em `x`.
-fn draw_circle(painter: &Painter, proj: &Projector, x: f32, r: f32, stroke: Stroke) {
+/// Círculo traçado por `at(cos, sin)`, que dá o plano e o raio.
+fn draw_circle(painter: &Painter, proj: &Projector, stroke: Stroke, at: impl Fn(f32, f32) -> Vec3) {
     let step = std::f32::consts::TAU / CIRCLE_SEGMENTS as f32;
     for i in 0..CIRCLE_SEGMENTS {
         let (s0, c0) = (i as f32 * step).sin_cos();
         let (s1, c1) = ((i + 1) as f32 * step).sin_cos();
-        if let Some(seg) = proj.segment(Vec3::new(x, r * c0, r * s0), Vec3::new(x, r * c1, r * s1))
-        {
+        if let Some(seg) = proj.segment(at(c0, s0), at(c1, s1)) {
             painter.line_segment(seg, stroke);
         }
     }
@@ -2748,7 +2791,7 @@ mod tests {
         let mut picked = None;
         let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
-            draw_grid(&painter, &proj, &bounds, &palette);
+            draw_scene_base(&painter, &proj, &bounds, false, &palette);
             draw_reference(&painter, &proj, &params, 0.0, &palette);
             picked = draw_path(
                 &painter,
@@ -3211,6 +3254,95 @@ mod tests {
         (params, tp, cam, rect)
     }
 
+    /// Cena da operação com a câmera enquadrada.
+    fn scene_of(op: Operation) -> (Params, Bounds, Projector) {
+        let mut params = Params::default();
+        params.apply_operation(op);
+        let lines = tfm_core::gcode::generate(&params).unwrap_or_else(|e| panic!("{e}"));
+        let tp = tfm_core::toolpath::build_toolpath(&lines, &params);
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let bounds = scene_bounds(Some(&tp), Some(&params));
+        let mut cam = Camera::default();
+        cam.fit(bounds.min, bounds.max);
+        let proj = Projector::new(&cam, rect);
+        (params, bounds, proj)
+    }
+
+    /// Roda `draw` numa passada do egui e devolve os segmentos desenhados.
+    fn segments_of(rect: Rect, draw: impl Fn(&Painter)) -> Vec<([Pos2; 2], [u8; 4])> {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+            draw(&Painter::new(
+                ctx.clone(),
+                egui::LayerId::background(),
+                rect,
+            ));
+        });
+        output.textures_delta.clear();
+        let mut segments = Vec::new();
+        for clipped in &output.shapes {
+            collect_segments(&clipped.shape, &mut segments);
+        }
+        segments
+    }
+
+    /// O plano do chão fica só sob a peça deitada. Cilindro na horizontal fica
+    /// entre os eixos da máquina: sobra só o triedro.
+    #[test]
+    fn floor_shows_only_under_parts_lying_down() {
+        let palette = Palette::light();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let axes = [palette.danger, palette.success, palette.accent].map(|c| c.to_array());
+        for op in Operation::ALL {
+            let (params, bounds, proj) = scene_of(op);
+            let floor = has_floor(Some(&params));
+            let drawn = segments_of(rect, |painter| {
+                draw_scene_base(painter, &proj, &bounds, floor, &palette);
+            });
+            let grid = drawn.iter().filter(|(_, c)| !axes.contains(c)).count();
+            let lying = matches!(op, Operation::ChapaPlana | Operation::Bolacha);
+            assert_eq!(grid > 0, lying, "plano em {op:?}: {grid} linhas");
+            assert!(drawn.len() >= grid + 3, "triedro em {op:?}");
+        }
+        assert!(!has_floor(None), "sem peça ainda, sem plano");
+    }
+
+    /// A bolacha fica deitada na mesa, na altura da tocha, com a face para cima.
+    #[test]
+    fn bolacha_lies_on_the_table() {
+        let palette = Palette::light();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let (params, _, proj) = scene_of(Operation::Bolacha);
+        let r = params.diametro as f32 * 0.5;
+        let z = params.afastamento_tocha as f32;
+
+        let b = reference_bounds(&params);
+        assert_eq!((b.min.x, b.min.y, b.min.z), (-r, -r, z));
+        assert_eq!((b.max.x, b.max.y, b.max.z), (r, r, z));
+
+        let shape = BeadShape::from_params(&params);
+        let up = shape.surface.normal_at(Vec3::new(r, 0.0, z));
+        assert_eq!((up.x, up.y, up.z), (0.0, 0.0, 1.0));
+
+        let drawn = segments_of(rect, |painter| {
+            draw_reference(painter, &proj, &params, 0.0, &palette);
+        });
+        for rim in [
+            Vec3::new(r, 0.0, z),
+            Vec3::new(-r, 0.0, z),
+            Vec3::new(0.0, r, z),
+            Vec3::new(0.0, -r, z),
+        ] {
+            let at = proj
+                .project(rim)
+                .unwrap_or_else(|| panic!("a borda deveria estar visível"));
+            let found = drawn
+                .iter()
+                .any(|(pts, _)| pts.iter().any(|p| p.distance(at) < 1.0));
+            assert!(found, "falta a borda da peça em {rim:?}");
+        }
+    }
+
     /// O triedro XYZ nasce na origem da máquina: nas peças que giram, o
     /// centro do eixo A, e não o canto da grade.
     #[test]
@@ -3225,7 +3357,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
             let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
-            draw_grid(&painter, &proj, &bounds, &palette);
+            draw_scene_base(&painter, &proj, &bounds, false, &palette);
         });
         output.textures_delta.clear();
         let mut segments = Vec::new();
@@ -3314,6 +3446,77 @@ mod tests {
             max: Vec3::new(20.0, 25.0, 25.0),
             layer_count: 1,
         }
+    }
+
+    /// Malha, vista de topo, do cordão sobre a polilinha `xy` numa peça deitada.
+    /// Cada trecho sai com 8 vértices: pé esquerdo, crista início e fim, pé
+    /// esquerdo final; depois crista, pé direito e seus finais.
+    fn flat_bead(xy: &[(f32, f32)]) -> Mesh {
+        let points = xy
+            .iter()
+            .map(|&(x, y)| PathPoint {
+                pos: Vec3::new(x, y, 12.0),
+                line_idx: 0,
+                radius: 0.0,
+                a_deg: 0.0,
+                feed: 100.0,
+                torch_on: true,
+                extinguishing: false,
+                rapid: false,
+                layer: 0,
+            })
+            .collect();
+        let tp = Toolpath {
+            segments: vec![points],
+            min: Vec3::new(-50.0, -50.0, 12.0),
+            max: Vec3::new(50.0, 50.0, 12.0),
+            layer_count: 1,
+        };
+        let bead = BeadShape {
+            width: 8.0,
+            height: 1.5,
+            surface: Surface::Flat,
+            include_tail: false,
+        };
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let mut cam = Camera::default();
+        cam.preset(ViewPreset::Topo);
+        cam.target = Vec3::new(0.0, 0.0, 12.0);
+        cam.distance = 300.0;
+        let proj = Projector::new(&cam, rect);
+        bead_mesh(&proj, &tp, xy.len(), 0.0, bead, &Palette::light())
+    }
+
+    /// Na curva os trechos vizinhos dividem a aresta da emenda. Sem isso o lado
+    /// de fora abre em cunha, os dentes pretos na borda da bolacha.
+    #[test]
+    fn bead_curve_leaves_no_gap_between_segments() {
+        let arc: Vec<(f32, f32)> = (0..8)
+            .map(|k| {
+                let (s, c) = (k as f32 * 10f32.to_radians()).sin_cos();
+                (30.0 * c, 30.0 * s)
+            })
+            .collect();
+        let mesh = flat_bead(&arc);
+        let quads: Vec<&[egui::epaint::Vertex]> = mesh.vertices.chunks(8).collect();
+        assert_eq!(quads.len(), 7);
+        for w in quads.windows(2) {
+            for (end, start, name) in [(3, 0, "pé esquerdo"), (6, 5, "pé direito")] {
+                let gap = w[0][end].pos.distance(w[1][start].pos);
+                assert!(gap < 0.01, "{name} abriu {gap} px na emenda");
+            }
+        }
+    }
+
+    /// No canto vivo cada trecho fica com a sua aresta: dividir a emenda
+    /// estreitaria o cordão bem ali, como na virada da chapa.
+    #[test]
+    fn bead_sharp_corner_keeps_its_width() {
+        let mesh = flat_bead(&[(0.0, 0.0), (20.0, 0.0), (20.0, 20.0)]);
+        let v = &mesh.vertices;
+        let start = v[0].pos.distance(v[5].pos);
+        let end = v[3].pos.distance(v[6].pos);
+        assert!((start - end).abs() < 0.01, "início {start}, canto {end}");
     }
 
     /// Cada trecho com tocha ligada vira duas facetas (pé esquerdo→crista e

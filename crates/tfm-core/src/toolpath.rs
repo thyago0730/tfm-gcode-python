@@ -74,8 +74,8 @@ impl Vec3 {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PathPoint {
     /// Posição 3D. Cilíndrico: `(x, r·cos(a + 90°), r·sin(a + 90°))`; chapa
-    /// plana: `(x, y, z)` da máquina; bolacha: `(z, r·cos(a + 90°), r·sin(a + 90°))`
-    /// com `r` igual ao X da máquina.
+    /// plana: `(x, y, z)` da máquina; bolacha, deitada na mesa:
+    /// `(r·cos a, r·sin a, z)` com `r` igual ao X da máquina.
     pub pos: Vec3,
     /// Índice (base 0) da linha do G-code de origem; pontos interpolados
     /// apontam para a linha do `G1` que os gerou.
@@ -165,7 +165,8 @@ enum Mapping {
     Cylindrical,
     /// `chapa_plana`: cartesiano direto.
     Flat,
-    /// `bolacha`: eixo = Z da máquina, raio = X da máquina.
+    /// `bolacha`: peça deitada na mesa, que gira num eixo vertical. Raio = X da
+    /// máquina, altura = Z da máquina.
     Bolacha,
 }
 
@@ -273,6 +274,16 @@ fn vec3(x: f64, y: f64, z: f64) -> Vec3 {
 fn revolve(axis: f64, radius: f64, a_deg: f64) -> Vec3 {
     let rad = a_deg.to_radians() + FRAC_PI_2;
     vec3(axis, radius * rad.cos(), radius * rad.sin())
+}
+
+/// Ponto na bolacha, deitada na mesa como na máquina: A = 0 fica em +X, o raio
+/// que a tocha percorre, e a altura é o Z da máquina. A tocha fica parada e
+/// quem gira é a mesa, então com a mesa no sentido horário (A subindo) o cordão
+/// avança no anti-horário sobre a peça. Desvio de propósito do Python, que
+/// desenhava a peça em pé; o G-code não muda.
+fn on_table(height: f64, radius: f64, a_deg: f64) -> Vec3 {
+    let rad = a_deg.to_radians();
+    vec3(radius * rad.cos(), radius * rad.sin(), height)
 }
 
 /// `float(texto)` do Python dentro de `try/except: pass`: `None` em vez de erro.
@@ -399,11 +410,11 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
                 if !rapid {
                     for (t, a) in angular_steps(prev.a, m.a) {
                         let r = prev.x + (m.x - prev.x) * t;
-                        let axis = prev.z + (m.z - prev.z) * t;
-                        out.push(frame.point(revolve(axis, r, a), r, a), r);
+                        let height = prev.z + (m.z - prev.z) * t;
+                        out.push(frame.point(on_table(height, r, a), r, a), r);
                     }
                 }
-                out.push(frame.point(revolve(m.z, m.x, m.a), m.x, m.a), m.x);
+                out.push(frame.point(on_table(m.z, m.x, m.a), m.x, m.a), m.x);
             }
             Mapping::Cylindrical => {
                 let r = radius_at(m.z);
