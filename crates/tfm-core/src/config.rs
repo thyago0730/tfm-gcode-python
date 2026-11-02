@@ -330,6 +330,10 @@ pub struct UiPrefs {
     pub right_pinned: bool,
     #[serde(deserialize_with = "lenient_bool")]
     pub bottom_collapsed: bool,
+    /// Versão do layout já aplicada: o app usa para trocar os padrões uma vez
+    /// só, sem desfazer depois o que o usuário escolher.
+    #[serde(deserialize_with = "lenient_u32")]
+    pub layout_rev: u32,
     /// `"auto"` ou um fator numérico em texto (`"1.25"`), como no Python.
     #[serde(deserialize_with = "lenient_string")]
     pub dpi_scaling: String,
@@ -348,6 +352,7 @@ impl Default for UiPrefs {
             left_pinned: true,
             right_pinned: true,
             bottom_collapsed: false,
+            layout_rev: 0,
             dpi_scaling: "auto".to_string(),
             compact_threshold_px: 560,
             extra: IndexMap::new(),

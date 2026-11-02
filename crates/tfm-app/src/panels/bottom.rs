@@ -8,13 +8,16 @@
 //! placeholders de `limpar_resultados` (`"0.00"` nos resultados, `"..."` nos
 //! custos) e o motivo (`gen_error`) abre a coluna de avisos em `danger`.
 
-use egui::{Align, Button, Color32, Label, Layout, RichText, ScrollArea, Ui};
-use tfm_core::estimates::{CostSummary, Estimates, ResultText};
+use egui::{vec2, Align, Button, Color32, Id, Label, Layout, RichText, ScrollArea, Sense, Ui};
+use tfm_core::estimates::{hhmm, CostSummary, Estimates, ResultText};
 use tfm_core::overlap::Uniformity;
 
-use crate::app::{Notification, TfmApp};
+use crate::app::{Notification, NotifyKind, TfmApp};
+use crate::compute::ComputeResult;
 use crate::theme::Palette;
 
+/// Duração (s) do destaque de um valor que acabou de mudar.
+const PULSE_S: f64 = 0.8;
 /// Valor dos resultados sem cálculo válido (`limpar_resultados`).
 const RESULT_PLACEHOLDER: &str = "0.00";
 /// Valor dos custos sem cálculo válido (`limpar_resultados`).
@@ -170,6 +173,170 @@ fn cost_rows(costs: Option<&CostSummary>, palette: &Palette) -> Vec<Row> {
         .collect()
 }
 
+/// Um número da linha de status.
+#[derive(Clone, Debug, PartialEq)]
+pub struct StatusItem {
+    pub label: &'static str,
+    pub value: String,
+    pub tip: &'static str,
+    /// Acima do limite da máquina: aparece em vermelho.
+    pub alert: bool,
+}
+
+/// Os números que a operação olha todo dia, com traços sem cálculo válido. A
+/// lista não muda de tamanho, para a linha não pular enquanto recalcula.
+pub fn status_items(result: Option<&ComputeResult>) -> Vec<StatusItem> {
+    let valid = result.filter(|r| r.field_errors.is_valid() && r.gen_error.is_none());
+    let est = valid.map(|r| &r.estimates);
+    let text = |value: Option<String>| value.unwrap_or_else(|| "-".to_string());
+    let first_word = |s: &str| s.split_whitespace().next().unwrap_or("-").to_string();
+    let item = |label, value, tip, alert| StatusItem {
+        label,
+        value,
+        tip,
+        alert,
+    };
+    vec![
+        item(
+            "Tempo",
+            text(
+                valid
+                    .and_then(|r| r.deposit.as_ref())
+                    .map(|d| hhmm(d.report.weld_min as f64))
+                    .or_else(|| est.map(|e| e.time_hhmm.clone())),
+            ),
+            "Tempo de solda (hh:mm), já com a compensação",
+            false,
+        ),
+        item(
+            "Pó",
+            text(est.map(|e| fmt_kg(e.costs.powder_kg))),
+            "Pó consumido no programa",
+            false,
+        ),
+        item(
+            "Custo",
+            text(est.map(|e| fmt_money(&e.costs.currency, e.costs.total))),
+            "Custo total estimado",
+            false,
+        ),
+        item(
+            "Sobremetal",
+            text(
+                valid
+                    .and_then(|r| r.deposit.as_ref())
+                    .map(|d| format!("{:.2} mm", d.report.sobremetal_mm)),
+            ),
+            "Quanto a usinagem precisa tirar para nivelar a solda",
+            false,
+        ),
+        item(
+            "Passo",
+            text(est.map(|e| format!("{} mm", first_word(&e.pitch.text)))),
+            "Passo axial real",
+            est.is_some_and(|e| e.pitch.over_limit),
+        ),
+        item(
+            "Rotação",
+            text(est.map(|e| format!("{} min/volta", first_word(&e.rotation.text)))),
+            "Tempo de uma volta da peça",
+            est.is_some_and(|e| e.rotation.over_limit),
+        ),
+    ]
+}
+
+/// Cor de um valor: acende no destaque quando ele muda e volta ao normal em
+/// menos de um segundo, para o olho achar o que o último ajuste mexeu.
+fn pulse_color(
+    ui: &Ui,
+    label: &'static str,
+    value: &str,
+    base: Color32,
+    accent: Color32,
+) -> Color32 {
+    let id = Id::unique(("status_pulse", label));
+    let now = ui.input(|i| i.time);
+    let changed_at = ui.ctx().data_mut(|d| {
+        let slot = d.get_temp_mut_or_insert_with(id, || (value.to_string(), f64::MIN));
+        if slot.0 != value {
+            *slot = (value.to_string(), now);
+        }
+        slot.1
+    });
+    let k = 1.0 - ((now - changed_at) / PULSE_S).clamp(0.0, 1.0);
+    if k <= 0.0 {
+        return base;
+    }
+    ui.ctx().request_repaint();
+    base.lerp_to_gamma(accent, k as f32)
+}
+
+/// Linha de status, sempre visível: estado do cálculo, os números do dia a dia,
+/// o último aviso que importa e o botão dos detalhes.
+pub fn show_status(app: &mut TfmApp, ui: &mut Ui) {
+    let palette = app.palette;
+    let busy = app.compute.busy();
+    let result = app.result.as_ref();
+    let error = result.and_then(|r| r.gen_error.as_deref());
+    let invalid = result.is_some_and(|r| !r.field_errors.is_valid());
+    let items = status_items(result);
+    let mut toggle = false;
+    ui.horizontal_centered(|ui| {
+        let (color, hint) = if busy {
+            (palette.accent, "Calculando…")
+        } else if error.is_some() || invalid {
+            (palette.danger, "Verifique os parâmetros")
+        } else {
+            (palette.success, "Pronto")
+        };
+        let (rect, response) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+        let alpha = if busy {
+            ui.ctx().request_repaint();
+            0.55 + 0.45 * (ui.input(|i| i.time) * 6.0).sin() as f32
+        } else {
+            1.0
+        };
+        ui.painter()
+            .circle_filled(rect.center(), 4.0, color.gamma_multiply(alpha));
+        response.on_hover_text(hint);
+        for item in &items {
+            ui.add_space(8.0);
+            ui.add(Label::new(RichText::new(item.label).color(palette.muted)).selectable(false))
+                .on_hover_text(item.tip);
+            let base = if item.alert {
+                palette.danger
+            } else {
+                palette.text
+            };
+            let color = pulse_color(ui, item.label, &item.value, base, palette.accent);
+            ui.label(RichText::new(&item.value).monospace().strong().color(color))
+                .on_hover_text(item.tip);
+        }
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let collapsed = app.cfg.ui.bottom_collapsed;
+            let (icon, hint) = if collapsed {
+                ("▲", "Ver resultados, custos e avisos")
+            } else {
+                ("▼", "Recolher os detalhes")
+            };
+            toggle = ui.small_button(icon).on_hover_text(hint).clicked();
+            let last = app
+                .notifications
+                .iter()
+                .rev()
+                .find(|n| n.kind != NotifyKind::Info);
+            if let Some(n) = last {
+                let text =
+                    RichText::new(format!("{}  {}", n.time, n.text)).color(n.kind.color(&palette));
+                ui.add(Label::new(text).truncate());
+            }
+        });
+    });
+    if toggle {
+        app.cfg.ui.bottom_collapsed = !app.cfg.ui.bottom_collapsed;
+    }
+}
+
 /// `f"{symbol} {valor:.2f}"` do Python.
 fn fmt_money(symbol: &str, value: f64) -> String {
     format!("{symbol} {value:.2}")
@@ -301,6 +468,42 @@ mod tests {
 
     fn palette() -> Palette {
         Palette::light()
+    }
+
+    /// A linha de status traz os números do dia a dia, e a compensação não
+    /// muda a escolha deles.
+    #[test]
+    fn status_line_shows_the_daily_numbers() {
+        use crate::compute::compute_all;
+        use tfm_core::config::AppConfig;
+        use tfm_core::params::Params;
+
+        let params = Params {
+            fechamento_uniforme: true,
+            ..Params::default()
+        };
+        let r = compute_all(params, &AppConfig::default(), 1);
+        let items = status_items(Some(&r));
+        let labels: Vec<&str> = items.iter().map(|i| i.label).collect();
+        assert_eq!(
+            labels,
+            ["Tempo", "Pó", "Custo", "Sobremetal", "Passo", "Rotação"]
+        );
+        assert!(items
+            .iter()
+            .all(|i| !i.value.is_empty() && !i.tip.is_empty()));
+        let passo = items.iter().find(|i| i.label == "Passo");
+        assert_eq!(passo.map(|i| i.value.as_str()), Some("4.664 mm"));
+        let sobremetal = items.iter().find(|i| i.label == "Sobremetal");
+        assert!(sobremetal.is_some_and(|i| i.value.ends_with(" mm")));
+    }
+
+    /// Sem cálculo válido a linha fica de pé, com traços.
+    #[test]
+    fn status_line_without_result_uses_dashes() {
+        let items = status_items(None);
+        assert_eq!(items.len(), 6);
+        assert!(items.iter().all(|i| i.value == "-" && !i.alert));
     }
 
     #[test]

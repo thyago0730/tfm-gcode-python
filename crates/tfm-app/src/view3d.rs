@@ -27,7 +27,7 @@
 
 use egui::{
     pos2, vec2, Align2, Color32, CornerRadius, FontId, Id, Mesh, Painter, PointerButton, Pos2,
-    Rect, Response, Sense, Shape, Slider, Stroke, Ui, Vec2,
+    Rect, Response, Sense, Shape, Stroke, Ui, Vec2,
 };
 use tfm_core::deposit::{DepositModel, HeightMap};
 use tfm_core::gcode::common::overlap_metrics;
@@ -490,6 +490,12 @@ const CUBE_MARGIN: f32 = 10.0;
 /// A partir desta fração da meia-aresta, o clique numa face "pega" a aresta
 /// ou o canto vizinho e pede a vista diagonal, como no ViewCube do Inventor.
 const CUBE_EDGE_ZONE: f32 = 0.6;
+/// Rapidez do deslize da câmera: maior chega antes.
+const CAMERA_EASE: f32 = 12.0;
+/// Abaixo disto (graus) a câmera encosta na vista pedida.
+const CAMERA_SNAP_DEG: f32 = 0.15;
+/// Altura da linha do tempo sobre o 3D.
+const TIMELINE_H: f32 = 30.0;
 /// Lado do botão ⌂ (vista isométrica) ao lado do cubo.
 const CUBE_HOME: f32 = 18.0;
 
@@ -763,6 +769,8 @@ const HEAT_STOPS: [(f32, [u8; 3]); 5] = [
 ];
 /// Teto de vértices da superfície por quadro: mapas maiores são amostrados.
 const MAX_SURFACE_VERTICES: usize = 60_000;
+/// Pontos examinados para achar a altura sob o mouse.
+const PROBE_POINTS: f32 = 20_000.0;
 /// Abaixo disto (mm) não há material para desenhar.
 const SURFACE_MIN_MM: f32 = 0.02;
 
@@ -875,6 +883,71 @@ fn surface_mesh(
         }
     }
     mesh
+}
+
+/// O ponto da superfície sob o mouse.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct SurfaceProbe {
+    x: f32,
+    height: f32,
+    screen: Pos2,
+}
+
+/// Procura o ponto com material mais perto de `pointer`, só no lado virado para
+/// a câmera, a menos de [`PICK_RADIUS`] vezes dois.
+fn surface_probe(
+    proj: &Projector,
+    map: &HeightMap,
+    pointer: Pos2,
+    rotation: f32,
+    internal: bool,
+) -> Option<SurfaceProbe> {
+    let cells = (map.nx * map.na) as f32;
+    let stride = (cells / PROBE_POINTS).sqrt().ceil().max(1.0) as usize;
+    let side = if internal { -1.0 } else { 1.0 };
+    let reach = PICK_RADIUS * 2.0;
+    let mut best: Option<(f32, SurfaceProbe)> = None;
+    for ia in (0..map.na).step_by(stride) {
+        let angle = (map.a_at(ia) + 90.0).to_radians();
+        let (s, c) = angle.sin_cos();
+        let radial = rotate_part(Vec3::new(0.0, c, s), rotation);
+        for ix in (0..map.nx).step_by(stride) {
+            let height = map.height(ix, ia);
+            if height < SURFACE_MIN_MM {
+                continue;
+            }
+            let r = map.radius + side * height;
+            let x = map.x_at(ix);
+            let pos = rotate_part(Vec3::new(x, r * c, r * s), rotation);
+            if dot(scale(radial, side), sub(pos, proj.basis.eye)) >= 0.0 {
+                continue;
+            }
+            let Some(screen) = proj.project(pos) else {
+                continue;
+            };
+            let d = screen.distance(pointer);
+            if d < reach && best.is_none_or(|(b, _)| d < b) {
+                best = Some((d, SurfaceProbe { x, height, screen }));
+            }
+        }
+    }
+    best.map(|(_, probe)| probe)
+}
+
+/// Marca o ponto e mostra a altura dele e a diferença para a média.
+fn draw_probe(painter: &Painter, at: Pos2, probe: SurfaceProbe, mean: f32, palette: &Palette) {
+    painter.circle_stroke(probe.screen, 4.0, Stroke::new(1.5, palette.text));
+    let text = format!(
+        "X {:.1} · altura {:.2} mm ({:+.2})",
+        probe.x,
+        probe.height,
+        probe.height - mean
+    );
+    let galley = painter.layout_no_wrap(text, FontId::proportional(12.0), palette.text);
+    let box_at = at + vec2(14.0, 14.0);
+    let rect = Rect::from_min_size(box_at, galley.size()).expand2(vec2(6.0, 3.0));
+    painter.rect_filled(rect, CornerRadius::same(4), palette.panel_bg);
+    painter.galley(box_at, galley, palette.text);
 }
 
 // ---------------------------------------------------------------------------
@@ -1066,7 +1139,7 @@ impl Default for Sim {
             progress: 0.0,
             speed: 1.0,
             show_trace: true,
-            show_weld: false,
+            show_weld: true,
         }
     }
 }
@@ -1112,6 +1185,14 @@ impl Sim {
         if self.progress >= 1.0 {
             self.playing = false;
         }
+    }
+
+    /// Leva a simulação ao ponto `at` (0..=1) e a deixa parada ali: é o que a
+    /// linha do tempo faz ao ser arrastada.
+    pub fn seek(&mut self, at: f32) {
+        self.playing = false;
+        let at = if at.is_finite() { at } else { 0.0 };
+        self.progress = at.clamp(1e-4, 1.0);
     }
 
     /// Posição de `speed` em [`SPEEDS`] (1x se não estiver na tabela).
@@ -1162,6 +1243,8 @@ pub struct ViewState {
     scratch: Vec<Pos2>,
     /// Depósito acumulado na simulação (ver [`Self::partial_map`]).
     partial: Option<PartialDeposit>,
+    /// `(yaw, pitch)` para onde a câmera está deslizando.
+    cam_goal: Option<(f32, f32)>,
 }
 
 impl Default for ViewState {
@@ -1175,6 +1258,7 @@ impl Default for ViewState {
             last_operation: None,
             scratch: Vec::new(),
             partial: None,
+            cam_goal: None,
         }
     }
 }
@@ -1208,19 +1292,42 @@ impl ViewState {
     pub fn mark_adjusted(&mut self) {
         self.user_adjusted = true;
         self.fit_pending = false;
+        self.cam_goal = None;
+    }
+
+    /// Aproxima a câmera da vista pedida em `dt` segundos, pelo caminho mais
+    /// curto. Devolve `true` enquanto ainda está a caminho.
+    fn animate_camera(&mut self, dt: f32) -> bool {
+        let Some((yaw, pitch)) = self.cam_goal else {
+            return false;
+        };
+        let k = 1.0 - (-CAMERA_EASE * dt).exp();
+        let dyaw = wrap_deg(yaw - self.cam.yaw);
+        let dpitch = pitch - self.cam.pitch;
+        if dyaw.abs().max(dpitch.abs()) < CAMERA_SNAP_DEG {
+            self.cam.yaw = yaw;
+            self.cam.pitch = pitch;
+            self.cam_goal = None;
+            return false;
+        }
+        self.cam.yaw = wrap_deg(self.cam.yaw + dyaw * k);
+        self.cam.pitch += dpitch * k;
+        true
     }
 
     /// Menu "Simulação > Vista ...", teclas 1–5 e ⌂ do cubo. Uma vista nova
     /// é um recomeço: o próximo resultado volta a enquadrar.
     pub fn set_preset(&mut self, v: ViewPreset) {
-        self.cam.preset(v);
+        self.cam_goal = Some(v.angles());
         self.user_adjusted = false;
     }
 
     /// Clique numa face, aresta ou canto do cubo de orientação: também é um
     /// recomeço, como um preset.
     pub fn look_from(&mut self, dir: Vec3) {
-        self.cam.look_from(dir);
+        let mut goal = self.cam;
+        goal.look_from(dir);
+        self.cam_goal = Some((goal.yaw, goal.pitch));
         self.user_adjusted = false;
     }
 
@@ -1330,24 +1437,13 @@ impl Bounds {
 }
 
 fn scene_bounds(toolpath: Option<&Toolpath>, params: Option<&Params>) -> Bounds {
+    // Na peça que gira, a cena é a peça: o recuo de segurança da tocha, dezenas
+    // de milímetros acima dela, deixaria a peça pequena na tela.
+    if let Some(p) = params.filter(|p| part_rotates(p)) {
+        return reference_bounds(p);
+    }
     if let Some(tp) = toolpath {
         if is_finite(tp.min) && is_finite(tp.max) {
-            // A peça cilíndrica gira: a caixa em Y/Z vai até o maior raio
-            // alcançado, para o enquadramento não depender de onde o cordão
-            // parou.
-            if params.is_some_and(part_rotates) {
-                let r = tp
-                    .min
-                    .y
-                    .abs()
-                    .max(tp.max.y.abs())
-                    .max(tp.min.z.abs())
-                    .max(tp.max.z.abs());
-                return Bounds {
-                    min: Vec3::new(tp.min.x, -r, -r),
-                    max: Vec3::new(tp.max.x, r, r),
-                };
-            }
             return Bounds {
                 min: tp.min,
                 max: tp.max,
@@ -1383,13 +1479,23 @@ fn reference_bounds(p: &Params) -> Bounds {
             }
         }
         _ => {
-            let r = cylinder_radius(p);
-            let len = finite_or(p.comprimento_revestir, 0.0).max(1.0);
+            let r = cylinder_radius(p) + finite_or(p.espessura_camada, 0.0).max(0.0);
+            let (x0, x1) = cylinder_span(p);
             Bounds {
-                min: Vec3::new(0.0, -r, -r),
-                max: Vec3::new(len, r, r),
+                min: Vec3::new(x0, -r, -r),
+                max: Vec3::new(x1, r, r),
             }
         }
+    }
+}
+
+/// Trecho da peça em X: o comprimento a revestir, a partir de X0 no sentido da
+/// solda; o percurso pode ir além (aproximações, apagamento).
+fn cylinder_span(p: &Params) -> (f32, f32) {
+    let len = finite_or(p.comprimento_revestir, 0.0).max(1.0);
+    match p.direcao_soldagem {
+        Direction::EsquerdaDireita => (0.0, len),
+        Direction::DireitaEsquerda => (-len, 0.0),
     }
 }
 
@@ -1473,8 +1579,6 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     let toolpath = result.map(|r| &r.toolpath).filter(|t| !t.is_empty());
     let total = toolpath.map_or(0, Toolpath::point_count);
 
-    toolbar(ui, state, total);
-
     let avail = ui.available_size();
     let size = vec2(avail.x.max(32.0), avail.y.max(32.0));
     let (response, painter) = ui.allocate_painter(size, Sense::click_and_drag());
@@ -1484,8 +1588,11 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     let bounds = scene_bounds(toolpath, result.map(|r| &r.params));
     interact(ui, &response, state, rect, &bounds, result.is_some());
 
+    let dt = ui.input(|i| i.stable_dt).min(0.1);
+    if state.animate_camera(dt) {
+        ui.ctx().request_repaint();
+    }
     if state.sim.playing {
-        let dt = ui.input(|i| i.stable_dt).min(0.1);
         state.sim.advance(dt, total);
         ui.ctx().request_repaint();
     }
@@ -1565,6 +1672,20 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     let readout = current.filter(|_| state.sim.active());
     overlay(&painter, rect, toolpath, readout, deposit, &palette);
     view_cube(ui, &painter, state, rect, &palette);
+    let bar = (total > 0).then(|| {
+        let weld_min = deposit.map(|m| m.report.weld_min);
+        timeline(ui, &painter, state, rect, total, weld_min, &palette)
+    });
+    if let (Some(m), Some(at)) = (deposit, response.hover_pos()) {
+        let free = !cube_rect(rect).expand(CUBE_HOME + 4.0).contains(at)
+            && !bar.is_some_and(|b| b.contains(at));
+        if free {
+            let probe = surface_probe(&proj, &m.map, at, rotation, m.internal);
+            if let Some(probe) = probe {
+                draw_probe(&painter, at, probe, m.report.mean_mm, &palette);
+            }
+        }
+    }
     picked
 }
 
@@ -1612,41 +1733,184 @@ fn interact(
     }
 }
 
-/// Barra de controles: ▶ ⏸ ⏹, vistas, Traçado, Solda e Velocidade.
-fn toolbar(ui: &mut Ui, state: &mut ViewState, total: usize) {
-    ui.horizontal_wrapped(|ui| {
-        if ui.button("▶").on_hover_text("Simular").clicked() {
+/// O que aparece no 3D: fica na mesma linha das abas.
+pub fn layer_toggles(ui: &mut Ui) {
+    let ctx = ui.ctx().clone();
+    let (mut trace, mut weld) = with_state(&ctx, |s| (s.sim.show_trace, s.sim.show_weld));
+    let solda = ui
+        .toggle_value(&mut weld, "Solda")
+        .on_hover_text("Material depositado: a cor mostra onde a camada sobe mais");
+    let tracado = ui
+        .toggle_value(&mut trace, "Traçado")
+        .on_hover_text("Trajetória da tocha");
+    if solda.changed() || tracado.changed() {
+        with_state(&ctx, |s| {
+            s.sim.show_trace = trace;
+            s.sim.show_weld = weld;
+        });
+    }
+}
+
+/// `mm:ss`, ou `h:mm:ss` a partir de uma hora.
+fn fmt_clock(minutes: f32) -> String {
+    let total = if minutes.is_finite() {
+        (minutes.max(0.0) * 60.0).round() as u64
+    } else {
+        0
+    };
+    let (h, m, s) = (total / 3600, total / 60 % 60, total % 60);
+    if h > 0 {
+        format!("{h}:{m:02}:{s:02}")
+    } else {
+        format!("{m:02}:{s:02}")
+    }
+}
+
+/// Linha do tempo sobre o 3D: play/pausa num botão só, parar, barra arrastável
+/// para ir a qualquer ponto, relógio e velocidade. Devolve o retângulo dela.
+fn timeline(
+    ui: &mut Ui,
+    painter: &Painter,
+    state: &mut ViewState,
+    viewport: Rect,
+    total: usize,
+    weld_min: Option<f32>,
+    palette: &Palette,
+) -> Rect {
+    let bar = Rect::from_min_max(
+        pos2(viewport.left() + 8.0, viewport.bottom() - TIMELINE_H - 8.0),
+        pos2(viewport.right() - 8.0, viewport.bottom() - 8.0),
+    );
+    painter.rect_filled(
+        bar,
+        CornerRadius::same(8),
+        palette.panel_bg.gamma_multiply(0.92),
+    );
+    let id = ui.scope_id().with("linha_do_tempo");
+    let y = bar.center().y;
+    let button = |cx: f32| Rect::from_center_size(pos2(cx, y), vec2(26.0, 26.0));
+
+    let play_rect = button(bar.left() + 18.0);
+    let playing = state.sim.playing;
+    let hint = if playing {
+        "Pausar (Espaço)"
+    } else {
+        "Simular (Espaço)"
+    };
+    let play = ui
+        .interact(play_rect, id.with("play"), Sense::click())
+        .on_hover_text(hint);
+    if play.clicked() {
+        if playing {
+            state.sim_pause();
+        } else {
             state.sim_play();
         }
-        if ui.button("⏸").on_hover_text("Pausar").clicked() {
-            state.sim_pause();
+    }
+    let color = |hovered: bool| {
+        if hovered {
+            palette.accent
+        } else {
+            palette.text
         }
-        if ui.button("⏹").on_hover_text("Parar").clicked() {
-            state.sim_stop();
+    };
+    let c = play_rect.center();
+    if playing {
+        for dx in [-3.5, 3.5] {
+            let r = Rect::from_center_size(c + vec2(dx, 0.0), vec2(4.0, 13.0));
+            painter.rect_filled(r, CornerRadius::same(1), color(play.hovered()));
         }
-        ui.separator();
-        ui.checkbox(&mut state.sim.show_trace, "Traçado")
-            .on_hover_text("Mostrar a trajetória da tocha");
-        ui.checkbox(&mut state.sim.show_weld, "Solda")
-            .on_hover_text("Mostrar o material depositado: a cor mostra onde a camada sobe mais");
-        ui.separator();
-        ui.label("Velocidade:");
-        let mut idx = state.sim.speed_index();
-        let slider = Slider::new(&mut idx, 0..=SPEEDS.len() - 1).show_value(false);
-        if ui
-            .add(slider)
-            .on_hover_text("Velocidade da simulação")
-            .changed()
-        {
-            state.sim.set_speed_index(idx);
-        }
-        ui.monospace(speed_label(state.sim.speed));
-        if total > 0 && state.sim.active() {
-            ui.separator();
-            let shown = (state.sim.progress * total as f32).round() as usize;
-            ui.weak(format!("ponto {shown} de {total}"));
-        }
-    });
+    } else {
+        // Um triângulo centrado pela caixa parece torto: 1 px à direita.
+        let points = vec![
+            c + vec2(-4.0, -7.0),
+            c + vec2(8.0, 0.0),
+            c + vec2(-4.0, 7.0),
+        ];
+        painter.add(Shape::convex_polygon(
+            points,
+            color(play.hovered()),
+            Stroke::NONE,
+        ));
+    }
+
+    let stop_rect = button(bar.left() + 46.0);
+    let stop = ui
+        .interact(stop_rect, id.with("stop"), Sense::click())
+        .on_hover_text("Parar e voltar ao início");
+    if stop.clicked() {
+        state.sim_stop();
+    }
+    painter.rect_filled(
+        Rect::from_center_size(stop_rect.center(), vec2(11.0, 11.0)),
+        CornerRadius::same(2),
+        color(stop.hovered()),
+    );
+
+    let speed_rect = Rect::from_center_size(pos2(bar.right() - 26.0, y), vec2(44.0, 22.0));
+    let speed = ui
+        .interact(speed_rect, id.with("velocidade"), Sense::click())
+        .on_hover_text("Velocidade da simulação: clique para acelerar, botão direito para reduzir");
+    let i = state.sim.speed_index();
+    if speed.clicked() {
+        state.sim.set_speed_index((i + 1) % SPEEDS.len());
+    } else if speed.secondary_clicked() {
+        state
+            .sim
+            .set_speed_index((i + SPEEDS.len() - 1) % SPEEDS.len());
+    }
+    let font = FontId::monospace(11.0);
+    painter.text(
+        speed_rect.center(),
+        Align2::CENTER_CENTER,
+        speed_label(state.sim.speed),
+        font.clone(),
+        color(speed.hovered()),
+    );
+
+    let progress = state.sim.progress.clamp(0.0, 1.0);
+    let clock = match weld_min {
+        Some(m) => format!("{} / {}", fmt_clock(m * progress), fmt_clock(m)),
+        None => format!("{} / {total}", (progress * total as f32).round() as usize),
+    };
+    let clock_w = 104.0;
+    painter.text(
+        pos2(speed_rect.left() - 6.0, y),
+        Align2::RIGHT_CENTER,
+        clock,
+        font,
+        palette.muted,
+    );
+
+    let track = Rect::from_min_max(
+        pos2(stop_rect.right() + 8.0, y - 13.0),
+        pos2(speed_rect.left() - clock_w - 10.0, y + 13.0),
+    );
+    let drag = ui
+        .interact(track, id.with("barra"), Sense::click_and_drag())
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if let Some(at) = drag
+        .interact_pointer_pos()
+        .filter(|_| drag.is_pointer_button_down_on())
+    {
+        state
+            .sim
+            .seek((at.x - track.left()) / track.width().max(1.0));
+    }
+    let rail = Rect::from_center_size(track.center(), vec2(track.width(), 4.0));
+    painter.rect_filled(
+        rail,
+        CornerRadius::same(2),
+        palette.muted.gamma_multiply(0.35),
+    );
+    let x = track.left() + track.width() * state.sim.progress.clamp(0.0, 1.0);
+    let done = Rect::from_min_max(rail.min, pos2(x, rail.max.y));
+    painter.rect_filled(done, CornerRadius::same(2), palette.accent);
+    let grow =
+        ui.ctx()
+            .animate_bool_with_time(id.with("botao"), drag.hovered() || drag.dragged(), 0.1);
+    painter.circle_filled(pos2(x, y), 5.0 + 2.0 * grow, palette.accent);
+    bar
 }
 
 /// Grade do chão (plano XY logo abaixo da peça) e o triedro XYZ na origem da
@@ -1756,13 +2020,7 @@ fn draw_reference(
         }
         _ => {
             let r = cylinder_radius(p);
-            let len = finite_or(p.comprimento_revestir, 0.0).max(1.0);
-            // A peça é o trecho a revestir, a partir de X0 no sentido da
-            // solda; o percurso pode ir além (aproximações, apagamento).
-            let (x0, x1) = match p.direcao_soldagem {
-                Direction::EsquerdaDireita => (0.0, len),
-                Direction::DireitaEsquerda => (-len, 0.0),
-            };
+            let (x0, x1) = cylinder_span(p);
             draw_circle(painter, proj, x0, r, stroke);
             draw_circle(painter, proj, x1, r, stroke);
             for k in 0..4 {
@@ -1993,7 +2251,7 @@ fn deposit_legend(painter: &Painter, rect: Rect, m: &DepositModel, palette: &Pal
         lines.push(format!("Sem material em {:.1}% da área", r.uncovered_pct));
     }
     let left = rect.left() + 8.0;
-    let mut y = rect.bottom() - 24.0;
+    let mut y = rect.bottom() - TIMELINE_H - 16.0;
     for line in lines.iter().rev() {
         painter.text(
             pos2(left, y),
@@ -2028,8 +2286,8 @@ fn deposit_legend(painter: &Painter, rect: Rect, m: &DepositModel, palette: &Pal
 
 /// Textos sobre o viewport: resumo e, durante a simulação, a leitura da
 /// máquina (acima, à esquerda: X da tocha e ângulo A da peça), aviso de
-/// decimação (abaixo, à esquerda) e dica de uso (abaixo, à direita). O canto
-/// superior direito é do cubo de orientação.
+/// decimação (abaixo, à direita). O canto superior direito é do cubo de
+/// orientação, e a faixa de baixo, da linha do tempo.
 fn overlay(
     painter: &Painter,
     rect: Rect,
@@ -2068,22 +2326,13 @@ fn overlay(
         );
         if decimation_step(total) > 1 {
             painter.text(
-                rect.left_bottom() + vec2(pad.x, -pad.y),
-                Align2::LEFT_BOTTOM,
+                rect.right_bottom() + vec2(-pad.x, -pad.y - TIMELINE_H - 8.0),
+                Align2::RIGHT_BOTTOM,
                 "traçado simplificado para exibição",
                 font.clone(),
                 palette.muted,
             );
         }
-    }
-    if rect.width() > 420.0 {
-        painter.text(
-            rect.right_bottom() - pad,
-            Align2::RIGHT_BOTTOM,
-            "arrastar: girar · botão direito: mover · roda: zoom · duplo clique: enquadrar",
-            font,
-            palette.muted.gamma_multiply(0.8),
-        );
     }
 }
 
@@ -2344,6 +2593,7 @@ mod tests {
         );
         assert!(!state.fit_pending);
         state.set_preset(ViewPreset::Topo);
+        while state.animate_camera(1.0 / 60.0) {}
         assert!((state.cam.pitch - 89.0).abs() < 0.5);
         state.sim_play();
         assert!(state.sim.playing);
@@ -2425,7 +2675,10 @@ mod tests {
     #[test]
     fn state_lives_in_egui_memory() {
         let ctx = egui::Context::default();
-        with_state(&ctx, |s| s.set_preset(ViewPreset::Esquerda));
+        with_state(&ctx, |s| {
+            s.set_preset(ViewPreset::Esquerda);
+            while s.animate_camera(1.0 / 60.0) {}
+        });
         let yaw = with_state(&ctx, |s| s.cam.yaw);
         assert!((yaw + 90.0).abs() < 1e-3, "yaw {yaw}");
     }
@@ -2547,6 +2800,102 @@ mod tests {
             Shape::Text(t) => texts.push(t.galley.text().to_owned()),
             _ => {}
         }
+    }
+
+    /// A câmera desliza até a vista pedida, pelo caminho mais curto, e para
+    /// sozinha ao chegar.
+    #[test]
+    fn camera_glides_to_the_requested_view() {
+        let mut state = ViewState::default();
+        state.cam.preset(ViewPreset::Iso);
+        state.set_preset(ViewPreset::Topo);
+        assert_eq!(state.cam.pitch, ViewPreset::Iso.angles().1, "não salta");
+        let mut quadros = 0;
+        while state.animate_camera(1.0 / 60.0) {
+            quadros += 1;
+            assert!(quadros < 200, "a câmera deveria chegar");
+        }
+        assert!(quadros > 5, "deveria levar alguns quadros: {quadros}");
+        assert_eq!((state.cam.yaw, state.cam.pitch), ViewPreset::Topo.angles());
+
+        // De 170° para -170° o caminho curto passa por 180°, não por 0°.
+        state.cam.yaw = 170.0;
+        state.cam_goal = Some((-170.0, 0.0));
+        while state.animate_camera(1.0 / 60.0) {
+            assert!(
+                state.cam.yaw.abs() > 160.0,
+                "deu a volta: {}",
+                state.cam.yaw
+            );
+        }
+    }
+
+    /// Mexer na câmera com o mouse cancela o deslize.
+    #[test]
+    fn dragging_cancels_the_camera_glide() {
+        let mut state = ViewState::default();
+        state.set_preset(ViewPreset::Topo);
+        state.mark_adjusted();
+        assert!(!state.animate_camera(1.0 / 60.0));
+    }
+
+    /// Arrastar a linha do tempo leva a simulação ao ponto e a deixa parada.
+    #[test]
+    fn seeking_pauses_at_the_chosen_point() {
+        let mut sim = Sim::default();
+        sim.play();
+        sim.seek(0.4);
+        assert!(!sim.playing);
+        assert_eq!(sim.progress, 0.4);
+        assert!(sim.active());
+        sim.seek(7.0);
+        assert_eq!(sim.progress, 1.0);
+        sim.seek(-1.0);
+        assert!(
+            sim.progress > 0.0 && sim.active(),
+            "o início ainda é simulação"
+        );
+        sim.seek(f32::NAN);
+        assert!(sim.progress.is_finite());
+    }
+
+    #[test]
+    fn clock_reads_minutes_and_hours() {
+        assert_eq!(fmt_clock(0.0), "00:00");
+        assert_eq!(fmt_clock(12.9), "12:54");
+        assert_eq!(fmt_clock(75.5), "1:15:30");
+        assert_eq!(fmt_clock(f32::NAN), "00:00");
+    }
+
+    /// Passar o mouse na peça lê a altura do ponto; fora da peça, nada.
+    #[test]
+    fn surface_probe_reads_the_height_under_the_pointer() {
+        let (_, tp, m) = deposit_scene();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let mut cam = Camera::default();
+        cam.fit(tp.min, tp.max);
+        let proj = Projector::new(&cam, rect);
+        let map = &m.map;
+        // A linha da peça mais virada para a câmera.
+        let forward = proj.basis.forward;
+        let facing = |ia: usize| {
+            let (s, c) = (map.a_at(ia) + 90.0).to_radians().sin_cos();
+            dot(Vec3::new(0.0, c, s), forward)
+        };
+        let ia = (0..map.na)
+            .min_by(|a, b| facing(*a).total_cmp(&facing(*b)))
+            .unwrap_or(0);
+        let ix = map.nx / 2;
+        let h = map.height(ix, ia);
+        let angle = (map.a_at(ia) + 90.0).to_radians();
+        let r = map.radius + h;
+        let at = Vec3::new(map.x_at(ix), r * angle.cos(), r * angle.sin());
+        let screen = proj.project(at).unwrap_or_else(|| panic!("fora da vista"));
+        let probe = surface_probe(&proj, map, screen, 0.0, false)
+            .unwrap_or_else(|| panic!("deveria achar a peça"));
+        assert!((probe.x - map.x_at(ix)).abs() < 2.0, "{probe:?}");
+        assert!((probe.height - h).abs() < 0.3, "{probe:?} vs {h}");
+        assert!(surface_probe(&proj, map, pos2(2.0, 2.0), 0.0, false).is_none());
     }
 
     /// Modelo de depósito da espiral com o fechamento uniforme.
@@ -2830,6 +3179,7 @@ mod tests {
             });
             output.textures_delta.clear();
         }
+        while state.animate_camera(1.0 / 60.0) {}
         assert!(
             state.cam.pitch > 88.0,
             "esperava a vista superior, veio pitch {}",
@@ -3222,23 +3572,27 @@ mod tests {
         assert_eq!(draw_limit(&sim, 0), 0);
     }
 
-    /// A caixa da cena cilíndrica é simétrica em Y e Z: a peça gira, então o
-    /// enquadramento não pode depender de onde o cordão parou.
+    /// Na peça que gira, a cena é a peça: o recuo de segurança da tocha não
+    /// entra no enquadramento.
     #[test]
-    fn cylindrical_scene_bounds_are_symmetric_in_yz() {
+    fn cylindrical_scene_is_the_part_and_not_the_safe_height() {
         let tp = Toolpath {
             segments: Vec::new(),
-            min: Vec3::new(0.0, -10.0, -3.0),
-            max: Vec3::new(100.0, 2.0, 12.0),
+            min: Vec3::new(0.0, -55.0, -55.0),
+            max: Vec3::new(150.0, 55.0, 55.0),
             layer_count: 1,
         };
         let b = scene_bounds(Some(&tp), Some(&Params::default()));
-        assert_eq!(b.min, Vec3::new(0.0, -12.0, -12.0));
-        assert_eq!(b.max, Vec3::new(100.0, 12.0, 12.0));
+        assert_eq!(b.min, Vec3::new(0.0, -26.5, -26.5));
+        assert_eq!(b.max, Vec3::new(50.0, 26.5, 26.5));
         let mut flat = Params::default();
         flat.apply_operation(Operation::ChapaPlana);
         let f = scene_bounds(Some(&tp), Some(&flat));
-        assert_eq!((f.min, f.max), (tp.min, tp.max), "chapa plana não gira");
+        assert_eq!(
+            (f.min, f.max),
+            (tp.min, tp.max),
+            "chapa plana segue o percurso"
+        );
     }
 
     /// Durante a simulação da espiral a tocha fica no topo da peça: o

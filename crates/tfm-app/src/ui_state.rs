@@ -372,8 +372,6 @@ fn parse_int(text: &str) -> Option<i64> {
 pub struct UiState {
     /// Operação escolhida nos cartões.
     pub operation: Operation,
-    /// Lista das sete operações aberta sob o cartão da operação atual.
-    pub list_expanded: bool,
     pub tab: LeftTab,
     /// "Mostrar avançado" (sobreposição angular, atrasos da tocha, calibração).
     pub show_advanced: bool,
@@ -413,7 +411,6 @@ impl UiState {
     pub fn from_params(p: &Params) -> Self {
         let mut state = UiState {
             operation: Operation::from_params(p),
-            list_expanded: false,
             tab: LeftTab::Parametros,
             show_advanced: false,
             fields: IndexMap::new(),
@@ -614,7 +611,6 @@ impl UiState {
     pub fn set_operation(&mut self, op: Operation) {
         let current = self.operation;
         if op == current {
-            self.list_expanded = false;
             return;
         }
         let snapshot = self.convert(None).0;
@@ -633,7 +629,6 @@ impl UiState {
                 }
             }
         }
-        self.list_expanded = false;
         self.mark_edited();
     }
 

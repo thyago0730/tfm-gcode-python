@@ -7,14 +7,14 @@ use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
 
 use serde_json::{Map, Value};
-use tfm_core::config::{self, AppConfig};
+use tfm_core::config::{self, AppConfig, UiPrefs};
 
 use crate::theme::Theme;
 
 /// Largura permitida do painel esquerdo (parâmetros), em pontos.
-pub const LEFT_RANGE: RangeInclusive<f32> = 300.0..=480.0;
+pub const LEFT_RANGE: RangeInclusive<f32> = 260.0..=420.0;
 /// Largura permitida do painel direito (G-code), em pontos.
-pub const RIGHT_RANGE: RangeInclusive<f32> = 300.0..=520.0;
+pub const RIGHT_RANGE: RangeInclusive<f32> = 260.0..=520.0;
 
 /// Pastas usadas pelo app, todas derivadas do caminho do `config.json`.
 #[derive(Clone, Debug)]
@@ -74,6 +74,27 @@ pub fn clamp(w: f32, range: &RangeInclusive<f32>) -> f32 {
     } else {
         *range.start()
     }
+}
+
+/// Versão atual do layout. Abaixo dela, [`migrate_layout`] aplica os padrões.
+pub const LAYOUT_REV: u32 = 1;
+/// Largura do painel de parâmetros no layout compacto.
+pub const COMPACT_LEFT_W: f32 = 310.0;
+/// Largura do painel do G-code no layout compacto.
+pub const COMPACT_RIGHT_W: f32 = 340.0;
+
+/// Aplica uma vez os padrões do layout compacto: 3D grande, G-code recolhido e
+/// detalhes fechados. Devolve `true` se mudou algo.
+pub fn migrate_layout(ui: &mut UiPrefs) -> bool {
+    if ui.layout_rev >= LAYOUT_REV {
+        return false;
+    }
+    ui.left_w = COMPACT_LEFT_W;
+    ui.right_w = COMPACT_RIGHT_W;
+    ui.right_pinned = false;
+    ui.bottom_collapsed = true;
+    ui.layout_rev = LAYOUT_REV;
+    true
 }
 
 /// Foto das preferências de layout que o app persiste em `cfg.ui`.
@@ -160,6 +181,7 @@ pub fn save_ui_prefs(cfg: &AppConfig, path: &Path) -> Result<Option<String>, Str
             "bottom_collapsed".into(),
             Value::Bool(cfg.ui.bottom_collapsed),
         );
+        ui.insert("layout_rev".into(), Value::from(cfg.ui.layout_rev));
     }
     let mut out =
         config::json_pretty4(&root).map_err(|err| format!("{} ({err})", path.display()))?;
@@ -245,10 +267,26 @@ mod tests {
 
     #[test]
     fn clamp_respeita_faixa_e_nao_finitos() {
-        assert_eq!(clamp(100.0, &LEFT_RANGE), 300.0);
+        assert_eq!(clamp(100.0, &LEFT_RANGE), 260.0);
         assert_eq!(clamp(999.0, &RIGHT_RANGE), 520.0);
-        assert_eq!(clamp(f32::NAN, &LEFT_RANGE), 300.0);
+        assert_eq!(clamp(f32::NAN, &LEFT_RANGE), 260.0);
         assert_eq!(clamp(400.0, &LEFT_RANGE), 400.0);
+    }
+
+    /// O layout compacto entra uma vez só: depois disso, o que o usuário
+    /// escolher fica valendo.
+    #[test]
+    fn layout_antigo_migra_uma_vez() {
+        let mut ui = UiPrefs::default();
+        assert_eq!(ui.layout_rev, 0);
+        assert!(migrate_layout(&mut ui));
+        assert_eq!(ui.layout_rev, LAYOUT_REV);
+        assert_eq!((ui.left_w, ui.right_w), (COMPACT_LEFT_W, COMPACT_RIGHT_W));
+        assert!(!ui.right_pinned && ui.bottom_collapsed && ui.left_pinned);
+        ui.right_pinned = true;
+        ui.bottom_collapsed = false;
+        assert!(!migrate_layout(&mut ui));
+        assert!(ui.right_pinned && !ui.bottom_collapsed);
     }
 
     #[test]

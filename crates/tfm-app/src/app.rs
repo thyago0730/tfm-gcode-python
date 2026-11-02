@@ -30,6 +30,8 @@ const PREFS_SAVE_DELAY: Duration = Duration::from_millis(1200);
 const COMPUTE_DEBOUNCE: Duration = Duration::from_millis(300);
 /// Largura da faixa que fica na borda quando um painel está recolhido.
 const EDGE_W: f32 = 22.0;
+/// Altura da linha de status.
+const STATUS_H: f32 = 26.0;
 
 /// Tipo de aviso mostrado no histórico do painel inferior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -140,7 +142,8 @@ pub struct TfmApp {
 impl TfmApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         let dirs = prefs::dirs();
-        let cfg = AppConfig::read(&dirs.config_path);
+        let mut cfg = AppConfig::read(&dirs.config_path);
+        prefs::migrate_layout(&mut cfg.ui);
         // Como o `ConfigManager.load()` do Python: garante o arquivo e as
         // chaves de `ui`, sem reescrever o resto do config. Um arquivo
         // ilegível vai para `config.json.bak` e o usuário é avisado.
@@ -477,15 +480,30 @@ const MENUS: &[(&str, &[Entry])] = &[
 ];
 
 impl TfmApp {
+    /// Barra superior: menus e ações. Com o alerta G53 aberto ela inteira se
+    /// transforma na pergunta, sem janela flutuante.
     fn top_bar(&mut self, ui: &mut egui::Ui) {
-        egui::Panel::top("menu").resizable(false).show(ui, |ui| {
-            egui::MenuBar::new().ui(ui, |ui| {
-                self.menus(ui);
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    self.action_buttons(ui)
-                });
+        let alert = self.integration.pending.is_some();
+        let k = ui
+            .ctx()
+            .animate_bool_with_time(egui::Id::unique("barra_g53"), alert, 0.15);
+        let frame = egui::Frame::side_top_panel(ui.style());
+        let fill = frame.fill.lerp_to_gamma(self.palette.warning, 0.22 * k);
+        egui::Panel::top("menu")
+            .resizable(false)
+            .frame(frame.fill(fill))
+            .show(ui, |ui| {
+                if alert {
+                    integration::g53_bar(self, ui);
+                } else {
+                    egui::MenuBar::new().ui(ui, |ui| {
+                        self.menus(ui);
+                        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                            self.action_buttons(ui)
+                        });
+                    });
+                }
             });
-        });
     }
 
     fn menus(&mut self, ui: &mut egui::Ui) {
@@ -583,148 +601,120 @@ impl TfmApp {
 
     /// Botões de ação à direita da barra. Em `right_to_left`, o primeiro
     /// adicionado fica mais à direita.
+    /// Ações do dia a dia. "Baixar G-code" e "Copiar tudo" ficam no menu
+    /// G-code, e os painéis abrem pelas faixas das bordas.
     fn action_buttons(&mut self, ui: &mut egui::Ui) {
-        let mut right_pinned = self.cfg.ui.right_pinned;
-        let hint = if right_pinned {
-            "Desafixar painel do G-code"
-        } else {
-            "Fixar painel do G-code"
+        let icon = match self.theme {
+            Theme::Auto => "💻",
+            Theme::Claro => "☀",
+            Theme::Escuro => "🌙",
         };
         if ui
-            .toggle_value(&mut right_pinned, "📌 G-code")
-            .on_hover_text(hint)
-            .changed()
-        {
-            self.set_right_pinned(right_pinned);
-        }
-        let mut left_pinned = self.cfg.ui.left_pinned;
-        let hint = if left_pinned {
-            "Desafixar painel de parâmetros"
-        } else {
-            "Fixar painel de parâmetros"
-        };
-        if ui
-            .toggle_value(&mut left_pinned, "📌 Parâmetros")
-            .on_hover_text(hint)
-            .changed()
-        {
-            self.set_left_pinned(left_pinned);
-        }
-        ui.separator();
-        let theme_label = format!("Tema: {}", self.theme.label());
-        if ui
-            .button(theme_label)
-            .on_hover_text("Alternar tema: Automático -> Claro -> Escuro")
+            .button(icon)
+            .on_hover_text(format!("Tema: {} (clique para trocar)", self.theme.label()))
             .clicked()
         {
             self.cycle_theme(ui.ctx());
         }
-        ui.separator();
         if ui
-            .button("Carregar")
-            .on_hover_text("Carregar procedimento salvo")
+            .button("📂")
+            .on_hover_text("Carregar procedimento (Ctrl+O)")
             .clicked()
         {
             self.on_menu(ui.ctx(), "Arquivo", "Carregar Procedimento...");
         }
         if ui
-            .button("Salvar")
-            .on_hover_text("Salvar procedimento atual")
+            .button("💾")
+            .on_hover_text("Salvar procedimento (Ctrl+S)")
             .clicked()
         {
             self.on_menu(ui.ctx(), "Arquivo", "Salvar Procedimento...");
         }
+        ui.separator();
         if ui
             .button("Abrir no Mach3")
-            .on_hover_text("Salvar .tap e abrir no Mach3")
+            .on_hover_text("Salvar o .tap e abrir no Mach3 (Ctrl+M)")
             .clicked()
         {
             self.on_menu(ui.ctx(), "G-code", "Abrir no Mach3");
-        }
-        if ui
-            .button("Baixar G-code")
-            .on_hover_text("Conferir a checklist e salvar o .tap com o nome da ordem de serviço")
-            .clicked()
-        {
-            self.on_menu(ui.ctx(), "G-code", "Baixar G-code");
         }
         let generate =
             egui::Button::new(RichText::new("Gerar G-code").strong().color(Color32::WHITE))
                 .fill(self.palette.accent);
         if ui
             .add(generate)
-            .on_hover_text("Gerar o G-code com os parâmetros atuais e salvar o .tap")
+            .on_hover_text("Gerar o G-code e salvar o .tap (Ctrl+G)")
             .clicked()
         {
             integration::generate_tap(self);
-        }
-        if self.compute.busy() {
-            ui.spinner();
         }
     }
 }
 
 impl TfmApp {
-    /// Painel esquerdo (parâmetros): 300 a 480 px quando visível; recolhido
-    /// vira uma faixa fina na borda com um botão para reabrir.
+    /// Painel esquerdo (parâmetros). Recolhido vira uma faixa na borda, e o
+    /// painel desliza ao abrir e fechar.
     fn left_panel(&mut self, ui: &mut egui::Ui) {
-        if self.left_open {
-            let pinned = self.cfg.ui.left_pinned;
-            egui::Panel::left("params")
-                .resizable(true)
-                .default_size(self.left_w)
-                .size_range(prefs::LEFT_RANGE)
-                .show(ui, |ui| {
-                    claim_width(ui);
-                    if !pinned && collapse_button(ui, "◀", "Recolher painel de parâmetros") {
-                        self.left_open = false;
-                    }
-                    panels::left::show_left(self, ui);
-                });
-            if let Some(w) = panel_width(ui, "params") {
-                if w != self.left_w {
-                    log::debug!("Largura do painel de parâmetros: {} -> {w}", self.left_w);
-                }
-                self.left_w = prefs::clamp(w, &prefs::LEFT_RANGE);
+        if !self.left_open
+            && edge_panel(
+                ui,
+                egui::Panel::left("params_edge"),
+                "Parâmetros",
+                "Mostrar os parâmetros",
+            )
+        {
+            self.set_left_pinned(true);
+        }
+        let mut open = self.left_open;
+        egui::Panel::left("params")
+            .resizable(true)
+            .default_size(self.left_w)
+            .size_range(prefs::LEFT_RANGE)
+            .show_collapsible(ui, &mut open, |ui| {
+                claim_width(ui);
+                panels::left::show_left(self, ui);
+            });
+        if !open && self.left_open {
+            self.set_left_pinned(false);
+        }
+        if let Some(w) = panel_width(ui, "params").filter(|_| self.left_open) {
+            if w != self.left_w {
+                log::debug!("Largura do painel de parâmetros: {} -> {w}", self.left_w);
             }
-        } else if edge_panel(
-            ui,
-            egui::Panel::left("params_edge"),
-            "▶",
-            "Mostrar painel de parâmetros",
-        ) {
-            self.left_open = true;
+            self.left_w = prefs::clamp(w, &prefs::LEFT_RANGE);
         }
     }
 
-    /// Painel direito (G-code): 300 a 520 px quando visível.
+    /// Painel direito (G-code), recolhido na faixa da borda por padrão: no dia
+    /// a dia o 3D é o que importa, e o programa abre quando precisar.
     fn right_panel(&mut self, ui: &mut egui::Ui) {
-        if self.right_open {
-            let pinned = self.cfg.ui.right_pinned;
-            egui::Panel::right("gcode")
-                .resizable(true)
-                .default_size(self.right_w)
-                .size_range(prefs::RIGHT_RANGE)
-                .show(ui, |ui| {
-                    claim_width(ui);
-                    if !pinned && collapse_button(ui, "▶", "Recolher painel do G-code") {
-                        self.right_open = false;
-                    }
-                    panels::right::show_right(self, ui);
-                });
-            if let Some(w) = panel_width(ui, "gcode") {
-                if w != self.right_w {
-                    log::debug!("Largura do painel do G-code: {} -> {w}", self.right_w);
-                }
-                self.right_w = prefs::clamp(w, &prefs::RIGHT_RANGE);
+        if !self.right_open
+            && edge_panel(
+                ui,
+                egui::Panel::right("gcode_edge"),
+                "G-code",
+                "Mostrar o G-code",
+            )
+        {
+            self.set_right_pinned(true);
+        }
+        let mut open = self.right_open;
+        egui::Panel::right("gcode")
+            .resizable(true)
+            .default_size(self.right_w)
+            .size_range(prefs::RIGHT_RANGE)
+            .show_collapsible(ui, &mut open, |ui| {
+                claim_width(ui);
+                panels::right::show_right(self, ui);
+            });
+        if !open && self.right_open {
+            self.set_right_pinned(false);
+        }
+        if let Some(w) = panel_width(ui, "gcode").filter(|_| self.right_open) {
+            if w != self.right_w {
+                log::debug!("Largura do painel do G-code: {} -> {w}", self.right_w);
             }
-        } else if edge_panel(
-            ui,
-            egui::Panel::right("gcode_edge"),
-            "◀",
-            "Mostrar painel do G-code",
-        ) {
-            self.right_open = true;
+            self.right_w = prefs::clamp(w, &prefs::RIGHT_RANGE);
         }
     }
 }
@@ -736,19 +726,6 @@ fn claim_width(ui: &mut egui::Ui) {
     ui.set_min_width(ui.available_width());
 }
 
-/// Botão pequeno, alinhado à direita, para recolher um painel desafixado.
-fn collapse_button(ui: &mut egui::Ui, icon: &str, hint: &str) -> bool {
-    // `horizontal` limita a altura a uma linha; sem ele o `with_layout`
-    // tomaria o painel inteiro e empurraria o conteúdo para fora.
-    ui.horizontal(|ui| {
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            ui.small_button(icon).on_hover_text(hint).clicked()
-        })
-        .inner
-    })
-    .inner
-}
-
 /// Largura atual de um painel lateral, lida do estado que o egui guarda
 /// (`None` antes do primeiro quadro).
 fn panel_width(ui: &egui::Ui, id_salt: &str) -> Option<f32> {
@@ -756,8 +733,9 @@ fn panel_width(ui: &egui::Ui, id_salt: &str) -> Option<f32> {
         .map(|state| state.outer_rect.width())
 }
 
-/// Faixa fina na borda com um botão alto para reabrir um painel recolhido.
-fn edge_panel(ui: &mut egui::Ui, panel: egui::Panel, icon: &str, hint: &str) -> bool {
+/// Faixa fina na borda, com o nome do painel em pé: um clique em qualquer
+/// lugar dela abre o painel.
+fn edge_panel(ui: &mut egui::Ui, panel: egui::Panel, label: &str, hint: &str) -> bool {
     let frame = egui::Frame::side_top_panel(ui.style()).inner_margin(egui::Margin::symmetric(2, 4));
     panel
         .resizable(false)
@@ -765,77 +743,94 @@ fn edge_panel(ui: &mut egui::Ui, panel: egui::Panel, icon: &str, hint: &str) -> 
         .frame(frame)
         .show(ui, |ui| {
             let size = egui::vec2(ui.available_width(), ui.available_height().max(40.0));
-            let button = egui::Button::new(RichText::new(icon).size(11.0)).frame(false);
-            ui.add_sized(size, button).on_hover_text(hint).clicked()
+            let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+            let response = response
+                .on_hover_text(hint)
+                .on_hover_cursor(egui::CursorIcon::PointingHand);
+            let visuals = ui.style().interact(&response);
+            if response.hovered() {
+                ui.painter().rect_filled(rect, 3.0, visuals.weak_bg_fill);
+            }
+            let color = visuals.text_color();
+            let galley = ui.painter().layout_no_wrap(
+                label.to_string(),
+                egui::FontId::proportional(12.0),
+                color,
+            );
+            let size = galley.size();
+            let at = egui::pos2(
+                rect.center().x - size.y / 2.0,
+                rect.center().y + size.x / 2.0,
+            );
+            ui.painter().add(
+                egui::epaint::TextShape::new(at, galley, color)
+                    .with_angle(-std::f32::consts::FRAC_PI_2),
+            );
+            response.clicked()
         })
         .inner
 }
 
 impl TfmApp {
-    /// Painel inferior "Resultados e Custos": recolhido mostra só o título;
-    /// expandido é redimensionável e mostra o conteúdo.
+    /// Rodapé: a linha de status fica sempre visível, e os detalhes (resultados,
+    /// custos e avisos) deslizam por cima dela quando pedidos.
     fn bottom_panel(&mut self, ui: &mut egui::Ui) {
-        if self.cfg.ui.bottom_collapsed {
-            egui::Panel::bottom("results_header")
-                .resizable(false)
-                .show(ui, |ui| self.bottom_header(ui));
-        } else {
-            egui::Panel::bottom("results")
-                .resizable(true)
-                .default_size(220.0)
-                .size_range(140.0..=480.0)
-                .show(ui, |ui| {
-                    // Idem para a altura do painel inferior expandido.
-                    ui.set_min_height(ui.available_height());
-                    self.bottom_header(ui);
-                    ui.separator();
-                    panels::bottom::show_bottom(self, ui);
-                });
+        egui::Panel::bottom("status")
+            .resizable(false)
+            .exact_size(STATUS_H)
+            .show(ui, |ui| panels::bottom::show_status(self, ui));
+        let mut expanded = !self.cfg.ui.bottom_collapsed;
+        egui::Panel::bottom("results")
+            .resizable(true)
+            .default_size(210.0)
+            .size_range(140.0..=480.0)
+            .show_collapsible(ui, &mut expanded, |ui| {
+                // Idem para a altura do painel inferior expandido.
+                ui.set_min_height(ui.available_height());
+                panels::bottom::show_bottom(self, ui);
+            });
+        self.cfg.ui.bottom_collapsed = !expanded;
+    }
+
+    /// Abas do centro, com o sublinhado deslizando até a aba escolhida.
+    fn center_tabs(&mut self, ui: &mut egui::Ui) {
+        let palette = self.palette;
+        let mut selected = None;
+        for tab in CenterTab::ALL {
+            let active = self.center_tab == tab;
+            let color = if active { palette.text } else { palette.muted };
+            let label = RichText::new(tab.label()).color(color);
+            let response = ui.add(egui::Button::new(label).frame(false));
+            if response.clicked() {
+                self.center_tab = tab;
+            }
+            if active {
+                selected = Some(response.rect);
+            }
+        }
+        if let Some(rect) = selected {
+            let ctx = ui.ctx();
+            let left = ctx.animate_value_with_time(egui::Id::unique("aba_x0"), rect.left(), 0.15);
+            let right = ctx.animate_value_with_time(egui::Id::unique("aba_x1"), rect.right(), 0.15);
+            ui.painter().hline(
+                left..=right,
+                rect.bottom(),
+                egui::Stroke::new(2.0, palette.accent),
+            );
         }
     }
 
-    /// Linha de título do painel inferior: nome, último aviso e botão ▲/▼.
-    fn bottom_header(&mut self, ui: &mut egui::Ui) {
-        let collapsed = self.cfg.ui.bottom_collapsed;
-        ui.horizontal(|ui| {
-            ui.strong("Resultados e Custos");
-            if let Some(last) = self.notifications.last() {
-                ui.separator();
-                let color = last.kind.color(&self.palette);
-                let text = format!("{}  [{}] {}", last.time, last.kind.label(), last.text);
-                let max_w = (ui.available_width() - 40.0).max(0.0);
-                ui.scope(|ui| {
-                    ui.set_max_width(max_w);
-                    ui.add(egui::Label::new(RichText::new(text).color(color)).truncate());
-                });
-            }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let (icon, hint) = if collapsed {
-                    ("▲", "Expandir resultados")
-                } else {
-                    ("▼", "Recolher resultados")
-                };
-                if ui.small_button(icon).on_hover_text(hint).clicked() {
-                    self.cfg.ui.bottom_collapsed = !collapsed;
-                }
-            });
-        });
-    }
-
-    /// Centro: faixa de abas e o conteúdo da aba ativa.
+    /// Centro: uma linha só com as abas e, no 3D, as camadas visíveis.
     fn center(&mut self, ui: &mut egui::Ui) {
-        egui::CentralPanel::default().show(ui, |ui| {
+        let frame = egui::Frame::central_panel(ui.style()).inner_margin(egui::Margin::same(4));
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
             ui.horizontal(|ui| {
-                for tab in CenterTab::ALL {
-                    if ui
-                        .selectable_label(self.center_tab == tab, tab.label())
-                        .clicked()
-                    {
-                        self.center_tab = tab;
-                    }
+                self.center_tabs(ui);
+                if self.center_tab == CenterTab::View3d {
+                    ui.with_layout(Layout::right_to_left(Align::Center), view3d::layer_toggles);
                 }
             });
-            ui.separator();
+            ui.add_space(3.0);
             match self.center_tab {
                 CenterTab::View3d => view3d::show_view3d(self, ui),
                 _ => panels::center::show_center(self, ui),
@@ -859,7 +854,6 @@ impl eframe::App for TfmApp {
         self.bottom_panel(ui);
         self.center(ui);
         dialogs::show_dialogs(self, &ctx);
-        integration::show_modals(self, &ctx);
 
         self.track_prefs(&ctx);
         if ctx.input(|i| i.viewport().close_requested()) {

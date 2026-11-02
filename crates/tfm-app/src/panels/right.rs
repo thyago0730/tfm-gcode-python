@@ -3,7 +3,7 @@
 //! Lista virtualizada ([`egui::ScrollArea::show_rows`]) com fonte
 //! monoespaçada e cor por tipo de linha, busca sem distinção de maiúsculas
 //! com navegação ▲/▼, filtros por eixo, LED do estado da tocha (M101/M102)
-//! na linha selecionada e os botões "Copiar tudo" / "Salvar .tap". O que é
+//! na linha selecionada e o botão "Copiar". O que é
 //! caro para programas grandes (filtrar, buscar, estado da tocha) fica em
 //! cache e só é refeito quando o resultado, os filtros ou a busca mudam.
 
@@ -304,7 +304,7 @@ fn line_color(kind: LineKind, palette: &Palette, ui: &Ui) -> (Color32, bool) {
 /// os empréstimos do painel terminam.
 enum Action {
     CopyAll,
-    SaveTap,
+    Collapse,
 }
 
 /// Desenha o painel direito.
@@ -321,8 +321,7 @@ pub fn show_right(app: &mut TfmApp, ui: &mut Ui) {
     };
     match action {
         Some(Action::CopyAll) => copy_gcode(app, ui.ctx()),
-        // Mesmo fluxo do botão "Gerar G-code" (validações, alerta G53, auditoria).
-        Some(Action::SaveTap) => crate::integration::generate_tap(app),
+        Some(Action::Collapse) => app.set_right_pinned(false),
         None => {}
     }
 }
@@ -355,8 +354,22 @@ fn view_ui(
 
     // Título e contagem de linhas.
     ui.horizontal(|ui| {
-        ui.heading("G-code");
+        ui.strong("G-code");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .small_button("›")
+                .on_hover_text("Recolher o G-code")
+                .clicked()
+            {
+                action = Some(Action::Collapse);
+            }
+            if ui
+                .add_enabled(total > 0, egui::Button::new("Copiar").small())
+                .on_hover_text("Copiar o G-code inteiro para a área de transferência")
+                .clicked()
+            {
+                action = Some(Action::CopyAll);
+            }
             if busy {
                 ui.spinner();
                 ui.weak("calculando…");
@@ -435,24 +448,6 @@ fn view_ui(
         }
     });
 
-    // Botões.
-    ui.horizontal(|ui| {
-        let has_lines = total > 0;
-        if ui
-            .add_enabled(has_lines, egui::Button::new("Copiar tudo"))
-            .on_hover_text("Copiar o G-code inteiro para a área de transferência")
-            .clicked()
-        {
-            action = Some(Action::CopyAll);
-        }
-        if ui
-            .add_enabled(has_lines, egui::Button::new("Salvar .tap"))
-            .on_hover_text("Salvar o programa como arquivo .tap")
-            .clicked()
-        {
-            action = Some(Action::SaveTap);
-        }
-    });
     ui.separator();
 
     match result {

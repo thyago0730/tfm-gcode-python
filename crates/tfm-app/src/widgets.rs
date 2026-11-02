@@ -13,6 +13,8 @@ use crate::theme::Palette;
 
 /// Largura (px) dos campos numéricos, igual em todos os painéis.
 pub const NUM_FIELD_WIDTH: f32 = 90.0;
+/// Espaço que a seta ocupa além da largura pedida a um combo.
+const COMBO_ARROW_W: f32 = 16.0;
 
 /// Converte o texto de um campo numérico em `f64`.
 ///
@@ -99,7 +101,9 @@ pub fn combo_field<T: PartialEq + Copy>(
             .map_or("—", |(_, name)| *name);
         let mut changed = false;
         let response = ComboBox::from_id_salt(label)
-            .width(ui.available_width().max(NUM_FIELD_WIDTH))
+            // A seta do combo soma à largura pedida: sem a folga, ele invade o
+            // rótulo.
+            .width((ui.available_width() - COMBO_ARROW_W).max(NUM_FIELD_WIDTH))
             .selected_text(current)
             .show_ui(ui, |ui| {
                 for (option, name) in options {

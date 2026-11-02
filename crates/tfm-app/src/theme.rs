@@ -185,9 +185,10 @@ pub fn apply(ctx: &egui::Context, theme: Theme) -> Palette {
 const MIN_SMALL_PX: f32 = 11.0;
 
 fn tune_style(style: &mut egui::Style) {
-    style.spacing.item_spacing = egui::vec2(8.0, 6.0);
-    style.spacing.button_padding = egui::vec2(10.0, 5.0);
-    style.spacing.menu_margin = Margin::same(6);
+    style.spacing.item_spacing = egui::vec2(6.0, 3.0);
+    style.spacing.button_padding = egui::vec2(8.0, 3.0);
+    style.spacing.interact_size.y = 22.0;
+    style.spacing.menu_margin = Margin::same(4);
     style.spacing.window_margin = Margin::same(12);
     style.interaction.selectable_labels = false;
     style.visuals.slider_trailing_fill = true;

@@ -9,7 +9,7 @@
 //! O alerta de segurança G53 era um `messagebox.askyesno`; aqui ele precisa
 //! sobreviver a vários quadros, então a ação pendente (gravar o `.tap` ou
 //! abrir no Mach3) fica em [`IntegrationState::pending`] (campo `integration`
-//! do `TfmApp`) e o modal é desenhado por [`show_modals`] a cada quadro.
+//! do `TfmApp`) e o alerta é a barra superior de [`g53_bar`], a cada quadro.
 //! "Abrir no Mach3" passa pelos mesmos bloqueios de "Gerar G-code" (campos,
 //! física, ISO 3834 e o alerta G53) e também registra auditoria; "Baixar
 //! G-code" (módulo `download`) reutiliza os mesmos portões e a mesma ação
@@ -54,6 +54,9 @@ pub const G53_BODY: &str = "Este programa usa G53 (Coordenadas de Máquina) para
 A MÁQUINA ESTÁ REFERENCIADA (REF ALL HOME)?\n\n\
 Se não estiver, pode haver COLISÃO.\n\
 Deseja continuar?";
+/// Pergunta da barra do alerta G53.
+pub const G53_QUESTION: &str =
+    "Programa com G53: a MÁQUINA ESTÁ REFERENCIADA (REF ALL HOME)? Se não estiver, pode haver COLISÃO.";
 /// Categoria do log de auditoria da geração manual.
 pub const AUDIT_CATEGORY: &str = "GCode Generation (Manual)";
 /// Categoria do log de auditoria de "Abrir no Mach3".
@@ -97,12 +100,21 @@ pub enum PendingAction {
 }
 
 impl PendingAction {
-    /// Aviso de cancelamento ("Não", Esc ou clique fora do modal).
+    /// Aviso de cancelamento ("Voltar" ou Esc).
     fn cancel_message(&self) -> &'static str {
         match self {
             PendingAction::SaveTap { .. } => "Geração cancelada.",
             PendingAction::OpenMach3 { .. } => "Abertura no Mach3 cancelada.",
             PendingAction::DownloadTap { .. } => "Download cancelado.",
+        }
+    }
+
+    /// Rótulo do botão de confirmar na barra do alerta G53: diz a ação.
+    pub fn confirm_label(&self) -> &'static str {
+        match self {
+            PendingAction::SaveTap { .. } => "Confirmar e salvar",
+            PendingAction::OpenMach3 { .. } => "Confirmar e abrir no Mach3",
+            PendingAction::DownloadTap { .. } => "Confirmar e baixar",
         }
     }
 }
@@ -460,7 +472,7 @@ pub(crate) fn validated_params(app: &mut TfmApp) -> Option<Params> {
 /// Botão "Gerar G-code", menu "G-code > Gerar G-code", "Salvar .tap" e
 /// Ctrl+G: porta de `_generate_gcode_clicked`. Valida (física, depois ISO
 /// 3834), gera, pede o arquivo e grava — ou deixa a gravação pendente do
-/// alerta G53 ([`show_modals`]).
+/// alerta G53 ([`g53_bar`]).
 pub fn generate_tap(app: &mut TfmApp) {
     let Some(params) = validated_params(app) else {
         return;
@@ -487,7 +499,7 @@ pub fn generate_tap(app: &mut TfmApp) {
 }
 
 /// Executa a ação, ou a deixa pendente do alerta G53 quando o programa usa
-/// G53 ([`show_modals`] executa no "Sim").
+/// G53 ([`g53_bar`] executa ao confirmar).
 pub(crate) fn run_or_confirm(app: &mut TfmApp, action: PendingAction) {
     let text = match &action {
         PendingAction::SaveTap { text, .. }
@@ -544,46 +556,71 @@ fn commit_save(app: &mut TfmApp, path: PathBuf, text: &str, params: &Params) {
     }
 }
 
-/// Desenha o alerta G53 enquanto há ação pendente. "Sim" executa (grava o
-/// `.tap` ou abre no Mach3); "Não", Esc ou clicar fora cancelam ("Geração
-/// cancelada." / "Abertura no Mach3 cancelada.").
-pub fn show_modals(app: &mut TfmApp, ctx: &egui::Context) {
-    if app.integration.pending.is_none() {
+/// Fecha o alerta G53: confirmado, executa a ação pendente (grava o `.tap` ou
+/// abre no Mach3); senão, cancela com o aviso da ação.
+pub fn resolve_pending(app: &mut TfmApp, confirmed: bool) {
+    let Some(action) = app.integration.pending.take() else {
         return;
+    };
+    if confirmed {
+        run_action(app, action);
+    } else {
+        app.notify(NotifyKind::Info, action.cancel_message());
     }
-    let mut decision: Option<bool> = None;
-    let response = egui::Modal::new(egui::Id::unique("tfm_g53_modal")).show(ctx, |ui| {
-        ui.set_max_width(460.0);
-        ui.heading(G53_TITLE);
-        ui.separator();
-        ui.label(G53_BODY);
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Não").clicked() {
-                    decision = Some(false);
-                }
-                if ui.button("Sim").clicked() {
-                    decision = Some(true);
-                }
-            });
+}
+
+/// O alerta G53 toma a barra superior no lugar dos menus e botões, em vez de
+/// abrir uma janela: quem clicou em salvar confirma ali mesmo. Só a tecla
+/// Ctrl+Enter confirma, para um Enter solto não liberar a máquina; Esc volta.
+pub fn g53_bar(app: &mut TfmApp, ui: &mut egui::Ui) {
+    let Some(label) = app
+        .integration
+        .pending
+        .as_ref()
+        .map(PendingAction::confirm_label)
+    else {
+        return;
+    };
+    let warning = app.palette.warning;
+    let mut decision = None;
+    ui.horizontal(|ui| {
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new(G53_QUESTION).strong().color(warning))
+            .on_hover_text(G53_BODY);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui
+                .button("←")
+                .on_hover_text("Voltar sem salvar (Esc)")
+                .clicked()
+            {
+                decision = Some(false);
+            }
+            let confirm = egui::Button::new(
+                egui::RichText::new(label)
+                    .strong()
+                    .color(egui::Color32::WHITE),
+            )
+            .fill(warning);
+            if ui
+                .add(confirm)
+                .on_hover_text("Máquina referenciada: continuar (Ctrl+Enter)")
+                .clicked()
+            {
+                decision = Some(true);
+            }
         });
     });
-    if decision.is_none() && response.should_close() {
-        decision = Some(false);
-    }
-    match decision {
-        Some(true) => {
-            if let Some(action) = app.integration.pending.take() {
-                run_action(app, action);
-            }
+    let keys = ui.input_mut(|i| {
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::Escape) {
+            Some(false)
+        } else if i.consume_key(egui::Modifiers::COMMAND, egui::Key::Enter) {
+            Some(true)
+        } else {
+            None
         }
-        Some(false) => {
-            if let Some(action) = app.integration.pending.take() {
-                app.notify(NotifyKind::Info, action.cancel_message());
-            }
-        }
-        None => {}
+    });
+    if let Some(confirmed) = decision.or(keys) {
+        resolve_pending(app, confirmed);
     }
 }
 
@@ -802,7 +839,6 @@ pub fn load_procedure_file(app: &mut TfmApp, path: &Path) {
 /// operações; marca sujo para o cálculo refazer o G-code.
 pub fn apply_loaded_params(ui: &mut UiState, params: &Params) {
     let mut fresh = UiState::from_params(params);
-    fresh.list_expanded = ui.list_expanded;
     fresh.tab = ui.tab;
     fresh.show_advanced = ui.show_advanced;
     fresh.presets = std::mem::take(&mut ui.presets);
@@ -933,7 +969,7 @@ fn poll_shortcut(input: &mut egui::InputState, focused: bool) -> Option<Shortcut
 }
 
 /// Chamado uma vez por quadro, antes dos painéis. Com o alerta G53 aberto
-/// as teclas ficam para o modal.
+/// as teclas ficam para a barra dele.
 pub fn handle_shortcuts(app: &mut TfmApp, ctx: &egui::Context) {
     if app.integration.pending.is_some() {
         return;
@@ -1152,6 +1188,35 @@ mod tests {
         assert_eq!(app.notifications.len(), 2, "um erro por ação");
     }
 
+    /// O alerta G53 fecha na barra: "Voltar" cancela sem gravar e confirmar
+    /// executa a ação que estava esperando.
+    #[test]
+    fn g53_bar_goes_back_or_confirms() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut app = TfmApp::headless(tmp.path());
+        let path = tmp.path().join("programa.tap");
+        let pending = |path: &std::path::Path| PendingAction::SaveTap {
+            path: path.to_path_buf(),
+            text: "G53 G0 Z0
+"
+            .to_string(),
+            params: Params::default(),
+        };
+        let action = pending(&path);
+        assert_eq!(action.confirm_label(), "Confirmar e salvar");
+        app.integration.pending = Some(action);
+        resolve_pending(&mut app, false);
+        assert!(app.integration.pending.is_none());
+        assert!(!path.exists(), "voltar não pode gravar");
+        let last = app.notifications.last().expect("aviso");
+        assert_eq!(last.text, "Geração cancelada.");
+
+        app.integration.pending = Some(pending(&path));
+        resolve_pending(&mut app, true);
+        assert!(app.integration.pending.is_none());
+        assert!(path.exists(), "confirmar deveria gravar o .tap");
+    }
+
     /// Regra física violada bloqueia "Abrir no Mach3" com a mesma mensagem
     /// "ERRO DE PARÂMETROS:" de "Gerar G-code"; campo que não converte, com
     /// "Por favor, verifique os parâmetros.".
@@ -1300,7 +1365,6 @@ mod tests {
         ui.set_operation(Operation::Espiral);
         // Depois de trocar de operação (que fecha a lista): estado de tela.
         ui.tab = LeftTab::Processo;
-        ui.list_expanded = true;
         ui.show_advanced = true;
         ui.dirty = false;
         let presets_before = ui.presets.clone();
@@ -1315,7 +1379,6 @@ mod tests {
         assert_eq!(ui.operation, Operation::Bolacha);
         assert_eq!(ui.fields["diametro"], "123.0");
         assert_eq!(ui.tab, LeftTab::Processo);
-        assert!(ui.list_expanded);
         assert!(ui.show_advanced);
         assert!(ui.dirty);
         assert!(ui.last_edit.is_some());

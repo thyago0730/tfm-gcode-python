@@ -5,9 +5,8 @@
 //! campo. Qualquer edição marca o estado como sujo ([`UiState::mark_edited`]).
 
 use egui::{
-    pos2, vec2, Align, Align2, CollapsingHeader, ComboBox, CornerRadius, CursorIcon, FontId, Frame,
-    Label, Layout, Margin, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextEdit, Ui,
-    Vec2,
+    vec2, Align, CollapsingHeader, ComboBox, CornerRadius, CursorIcon, Frame, Label, Layout,
+    Margin, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextEdit, Ui,
 };
 use tfm_core::config::AppConfig;
 use tfm_core::params::{
@@ -16,21 +15,17 @@ use tfm_core::params::{
 use tfm_core::quality::QualityManager;
 
 use crate::app::TfmApp;
-use crate::icons::{draw_operation_icon, operation_icon};
+use crate::icons::draw_operation_icon;
 use crate::theme::Palette;
 use crate::ui_state::{has_advanced, internal_applicable, is_oscillation, LeftTab, UiState};
 use crate::widgets::{
     check_field, combo_field, kpi, num_field, section, text_field, NUM_FIELD_WIDTH,
 };
 
-/// Tamanho do ícone da operação (o Canvas Tk tinha 40 × 35).
-const ICON_SIZE: Vec2 = vec2(40.0, 35.0);
-/// Altura de cada cartão da lista de operações.
-const CARD_H: f32 = 47.0;
-/// Margem interna dos cartões.
-const CARD_PAD: f32 = 8.0;
-/// Raio dos cantos dos cartões.
-const CARD_RADIUS: CornerRadius = CornerRadius::same(6);
+/// Altura de cada ícone da faixa de operações.
+const TILE_H: f32 = 34.0;
+/// Raio dos cantos dos ícones da faixa de operações.
+const TILE_RADIUS: CornerRadius = CornerRadius::same(5);
 
 /// Tooltips didáticos, um por campo (textos fixados no brief da task).
 mod tip {
@@ -155,8 +150,7 @@ pub fn show_left(app: &mut TfmApp, ui: &mut Ui) {
 
     let cfg = &app.cfg;
     let state = &mut app.ui;
-    operation_selector(state, &ctx.palette, ui);
-    ui.add_space(6.0);
+    let collapse = operation_selector(state, &ctx.palette, ui);
     ui.horizontal(|ui| {
         for tab in LeftTab::ALL {
             ui.selectable_value(&mut state.tab, tab, tab.label());
@@ -178,6 +172,9 @@ pub fn show_left(app: &mut TfmApp, ui: &mut Ui) {
         });
     if form.changed {
         form.state.mark_edited();
+    }
+    if collapse {
+        app.set_left_pinned(false);
     }
 }
 
@@ -302,133 +299,90 @@ fn row<R>(ui: &mut Ui, label: &str, tip: &str, add: impl FnOnce(&mut Ui) -> R) -
 
 /// Grupo com título em negrito (porta dos `LabelFrame` aninhados do Python).
 fn group(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
-    ui.add_space(2.0);
     Frame::group(ui.style())
-        .inner_margin(Margin::symmetric(8, 6))
+        .inner_margin(Margin::symmetric(6, 3))
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.label(RichText::new(title).strong());
             add(ui);
         });
-    ui.add_space(2.0);
 }
 
 // ---------------------------------------------------------------------------
 // Seletor de operação
 // ---------------------------------------------------------------------------
 
-/// Cartão da operação atual (ícone 40 × 35, nome em negrito, "Padrão" e
-/// ▼/▲) e, quando aberta, a lista dos sete cartões.
-fn operation_selector(state: &mut UiState, palette: &Palette, ui: &mut Ui) {
+/// As sete operações sempre à vista, a um clique, com o nome da atual, o
+/// "Padrão" e o botão de recolher embaixo. Devolve `true` ao pedir para recolher.
+fn operation_selector(state: &mut UiState, palette: &Palette, ui: &mut Ui) -> bool {
     let op = state.operation;
-    let (arrow, hint) = if state.list_expanded {
-        ("▲", "Recolher a lista de operações")
-    } else {
-        ("▼", "Escolher outra operação")
-    };
-    Frame::new()
-        .fill(palette.card_bg)
-        .stroke(Stroke::new(1.0, palette.border))
-        .corner_radius(CARD_RADIUS)
-        .inner_margin(Margin::symmetric(8, 6))
-        .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
-            // `horizontal` limita a altura a uma linha; sem ele o `with_layout`
-            // centralizaria a linha no painel inteiro e empurraria as abas e os
-            // campos para fora da tela.
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.small_button(arrow).on_hover_text(hint).clicked() {
-                        state.list_expanded = !state.list_expanded;
-                    }
-                    if ui.button("Padrão").on_hover_text(tip::PADRAO).clicked() {
-                        state.reset_defaults();
-                    }
-                    // O resto da linha (ícone + nome) também abre/fecha a lista.
-                    let size = vec2(ui.available_width().max(ICON_SIZE.x), ICON_SIZE.y);
-                    let inner = ui.allocate_ui_with_layout(
-                        size,
-                        Layout::left_to_right(Align::Center),
-                        |ui| {
-                            operation_icon(ui, op, ICON_SIZE, palette.text, palette.accent);
-                            ui.add_space(4.0);
-                            ui.add(
-                                Label::new(RichText::new(op.label()).strong().size(14.0))
-                                    .selectable(false)
-                                    .truncate(),
-                            );
-                        },
-                    );
-                    let response = ui
-                        .interact(
-                            inner.response.rect,
-                            ui.scope_id().with("op_header"),
-                            Sense::click(),
-                        )
-                        .on_hover_text(hint)
-                        .on_hover_cursor(CursorIcon::PointingHand);
-                    if response.clicked() {
-                        state.list_expanded = !state.list_expanded;
-                    }
-                });
-            });
-        });
-
-    if state.list_expanded {
-        ui.add_space(4.0);
-        let mut chosen = None;
+    let count = Operation::ALL.len() as f32;
+    let gap = 2.0;
+    let width = ((ui.available_width() - gap * (count - 1.0)) / count).floor();
+    let mut chosen = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = gap;
         for candidate in Operation::ALL {
-            if operation_card(ui, palette, candidate, candidate == op) {
+            if operation_tile(ui, palette, candidate, candidate == op, width) {
                 chosen = Some(candidate);
             }
-            ui.add_space(3.0);
         }
-        if let Some(candidate) = chosen {
-            state.set_operation(candidate);
-        }
+    });
+    if let Some(candidate) = chosen {
+        state.set_operation(candidate);
     }
+    let mut collapse = false;
+    ui.horizontal(|ui| {
+        ui.add(
+            Label::new(RichText::new(state.operation.label()).strong())
+                .selectable(false)
+                .truncate(),
+        );
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            collapse = ui
+                .small_button("‹")
+                .on_hover_text("Recolher os parâmetros")
+                .clicked();
+            if ui
+                .add(egui::Button::new("Padrão").small())
+                .on_hover_text(tip::PADRAO)
+                .clicked()
+            {
+                state.reset_defaults();
+            }
+        });
+    });
+    collapse
 }
 
-/// Um cartão da lista: ícone + rótulo curto, destacado quando selecionado.
+/// Um ícone da faixa de operações, com o destaque entrando e saindo aos poucos.
 /// Devolve `true` ao clicar.
-fn operation_card(ui: &mut Ui, palette: &Palette, op: Operation, selected: bool) -> bool {
-    let width = ui.available_width();
-    let (rect, response) = ui.allocate_exact_size(vec2(width, CARD_H), Sense::click());
+fn operation_tile(
+    ui: &mut Ui,
+    palette: &Palette,
+    op: Operation,
+    selected: bool,
+    width: f32,
+) -> bool {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, TILE_H), Sense::click());
     let response = response
         .on_hover_text(op.label())
         .on_hover_cursor(CursorIcon::PointingHand);
     if ui.is_rect_visible(rect) {
-        let fill = if selected {
-            palette.accent.gamma_multiply(0.18)
-        } else if response.hovered() {
+        let k = ui
+            .ctx()
+            .animate_bool_with_time(response.id.with("destaque"), selected, 0.12);
+        let base = if response.hovered() {
             ui.visuals().widgets.hovered.weak_bg_fill
         } else {
             palette.card_bg
         };
-        let stroke = if selected {
-            Stroke::new(1.5, palette.accent)
-        } else {
-            Stroke::new(1.0, palette.border)
-        };
+        let fill = base.lerp_to_gamma(palette.accent, 0.22 * k);
+        let stroke = Stroke::new(1.0, palette.border.lerp_to_gamma(palette.accent, k));
         let painter = ui.painter();
-        painter.rect(rect, CARD_RADIUS, fill, stroke, StrokeKind::Inside);
-        let icon_rect = Rect::from_min_size(
-            pos2(rect.min.x + CARD_PAD, rect.center().y - ICON_SIZE.y / 2.0),
-            ICON_SIZE,
-        );
-        draw_operation_icon(painter, icon_rect, op, palette.text, palette.accent);
-        let color = if selected {
-            palette.accent
-        } else {
-            palette.text
-        };
-        painter.text(
-            pos2(icon_rect.max.x + CARD_PAD, rect.center().y),
-            Align2::LEFT_CENTER,
-            op.short_label(),
-            FontId::proportional(13.0),
-            color,
-        );
+        painter.rect(rect, TILE_RADIUS, fill, stroke, StrokeKind::Inside);
+        let icon = Rect::from_center_size(rect.center(), rect.size() - vec2(8.0, 8.0));
+        draw_operation_icon(painter, icon, op, palette.text, palette.accent);
     }
     response.clicked()
 }
@@ -503,7 +457,7 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
             ) {
                 f.flag(
                     ui,
-                    "Fechamento uniforme (borda a borda)",
+                    "Fechamento uniforme",
                     "fechamento_uniforme",
                     tip::FECHAMENTO_UNIFORME,
                 );
@@ -516,7 +470,7 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
             ) {
                 f.flag(
                     ui,
-                    "Compensar rotação pela densidade",
+                    "Compensar rotação",
                     "compensar_rotacao",
                     tip::COMPENSAR_ROTACAO,
                 );
