@@ -2183,6 +2183,9 @@ fn draw_path(
     if total == 0 {
         return None;
     }
+    // A marca da linha selecionada gira presa à peça: com a simulação andando,
+    // pareceria uma segunda tocha. Ela volta na pausa.
+    let selected = selected.filter(|_| !state.sim.playing);
     let step = decimation_step(total);
     let limit = draw_limit(&state.sim, total);
     let show_trace = state.sim.show_trace && !surface;
@@ -3882,6 +3885,54 @@ mod tests {
         let text = machine_readout(pt, Spin::of(&params, Some(pt)));
         let x = format!("Tocha X {:.3}", pt.radius);
         assert!(text.contains(&x), "{text} deveria conter {x}");
+    }
+
+    /// Com a simulação andando só existe um marcador: a tocha. A marca da linha
+    /// selecionada gira presa à peça e pareceria uma segunda tocha, então ela
+    /// só volta na pausa.
+    #[test]
+    fn selected_line_marker_hides_while_the_simulation_plays() {
+        let (params, tp) = table_path(tfm_core::params::Rotation::Horaria);
+        let palette = Palette::light();
+        let rect = Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let mut state = ViewState::default();
+        state.cam.fit(tp.min, tp.max);
+        let line = tp
+            .points()
+            .filter(|q| q.torch_on)
+            .nth(10)
+            .map(|q| q.line_idx);
+        state.sim.play();
+        state.sim.progress = 0.5;
+        let cur = current_point(&tp, draw_limit(&state.sim, tp.point_count()))
+            .copied()
+            .unwrap_or_else(|| panic!("sem ponto atual"));
+        let spin = Spin::of(&params, Some(&cur));
+        let proj = Projector::new(&state.cam, rect);
+        let marks = |state: &mut ViewState| {
+            let ctx = egui::Context::default();
+            let mut output = ctx.run_pass(egui::RawInput::default(), |ctx| {
+                let painter = Painter::new(ctx.clone(), egui::LayerId::background(), rect);
+                draw_path(
+                    &painter, &proj, &tp, state, &palette, line, None, 5.0, spin, None, false,
+                );
+            });
+            output.textures_delta.clear();
+            let (mut circles, mut texts) = (Vec::new(), Vec::new());
+            for clipped in &output.shapes {
+                collect_shapes(&clipped.shape, &mut circles, &mut texts);
+            }
+            let count =
+                |c: egui::Color32| circles.iter().filter(|(_, k)| *k == c.to_array()).count();
+            (count(palette.danger), count(palette.warning))
+        };
+        assert_eq!(marks(&mut state), (1, 0), "andando: só a tocha");
+        state.sim.pause();
+        assert_eq!(
+            marks(&mut state),
+            (1, 1),
+            "pausada: a linha selecionada volta"
+        );
     }
 
     /// Na simulação da bolacha a tocha fica no raio X; quem anda é a mesa.
