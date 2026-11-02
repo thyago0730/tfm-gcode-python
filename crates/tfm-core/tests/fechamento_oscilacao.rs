@@ -198,11 +198,41 @@ fn extinguishing_never_runs_along_x() {
         let tail = tail(&lines);
         assert!(!tail.contains("F3000"), "{op:?}: apagamento em X: {tail}");
     }
-    // Sem a caixa, o comportamento do Python continua igual.
+    // Sem a caixa, a passada de fechamento em X continua como no Python, mas
+    // o apagamento não sai mais da peça.
     let lines = generate(&base(Operation::OscilacaoQuadrada, false));
-    assert!(tail(&lines).contains("F3000"));
+    assert!(!tail(&lines).contains("F3000"), "{}", tail(&lines));
     assert!(lines.iter().any(|l| l.starts_with("(Fechamento ate fim")));
     assert!(!lines.iter().any(|l| l.starts_with("(FECHAMENTO UNIFORME")));
+}
+
+/// A tocha desligando ainda deposita por 2 s: em nenhuma oscilação, com ou sem
+/// o fechamento uniforme, ela pode andar para fora da peça nesse tempo.
+#[test]
+fn torch_never_leaves_the_part_while_going_out() {
+    let cases = [
+        (Direction::EsquerdaDireita, false, 0.0, 50.0),
+        (Direction::DireitaEsquerda, false, -50.0, 0.0),
+        (Direction::EsquerdaDireita, true, -50.0, 0.0),
+    ];
+    for op in OPS {
+        for closing in [false, true] {
+            for (direcao_soldagem, operacao_interna, lo, hi) in cases {
+                let p = Params {
+                    direcao_soldagem,
+                    operacao_interna,
+                    diametro_interno: if operacao_interna { 80.0 } else { 0.0 },
+                    diametro: if operacao_interna { 100.0 } else { 50.0 },
+                    ..base(op, closing)
+                };
+                let (a, b) = deposit_x(&p);
+                assert!(
+                    a >= lo - 0.01 && b <= hi + 0.01,
+                    "{op:?} fechamento={closing} {direcao_soldagem:?}                      interno={operacao_interna}: material de X{a} a X{b}"
+                );
+            }
+        }
+    }
 }
 
 #[test]

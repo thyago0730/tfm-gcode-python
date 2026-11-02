@@ -66,8 +66,17 @@ fn check_case(case: &Case) -> Result<(), String> {
     let got = generate_with_timestamp(&p, TIMESTAMP)
         .map_err(|e| format!("{}: gerador falhou: {e}", case.name))?;
     let expected = expected_lines(&case.name);
+    let oscillation = case.name.starts_with("osc_") || case.name.starts_with("legado_osc");
 
     for (i, (e, o)) in expected.iter().zip(got.iter()).enumerate() {
+        // Desvio de propósito: no Python o apagamento das oscilações prolonga o
+        // último movimento e pode andar 100 mm em X, para fora da peça. Aqui ele
+        // gira em A (ver `torch_never_leaves_the_part_while_going_out`). Só essa
+        // linha fica de fora; todas as outras seguem exatas.
+        let tail = i > 0 && expected[i - 1].starts_with("(APAGAMENTO DA TOCHA");
+        if oscillation && tail {
+            continue;
+        }
         if e != o {
             return Err(format!(
                 "{}: linha {}\n  esperado: {e}\n  obtido:   {o}",

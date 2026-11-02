@@ -12,7 +12,9 @@
 //!   granularidade `osc_test_gran_x`/`osc_test_gran_a` e feeds independentes
 //!   por eixo; o lead-out desacelera em dois trechos (85% e 60% do feed de X).
 //!
-//! Porta literal: mesma ordem das operações aritméticas, mesmos clamps
+//! Porta literal, com um desvio de propósito: o apagamento gira em A, na peça,
+//! em vez de prolongar o último movimento em X ([`LayerFrame::rotary_tail`]).
+//! No resto, mesma ordem das operações aritméticas, mesmos clamps
 //! `max(.., min(.., ..))` (via `py_max`/`py_min`), mesmo idioma `x or padrao`
 //! (`py_or`) e as mesmas posições `last_weld_*` que alimentam o apagamento
 //! prolongado da tocha. As únicas omissões são atribuições do Python
@@ -46,9 +48,9 @@ const RESERVE_CAP: usize = 4_000_000;
 const BAND_SAMPLES: usize = 16;
 /// Largura de cada faixa de X da compensação das quadradas (mm).
 const SLOW_BIN_MM: f64 = 1.0;
-/// No fechamento uniforme das quadradas o apagamento gira este tanto mais
-/// rápido: o mesmo material num arco maior não forma um calombo.
-const CLOSING_TAIL_SPREAD: f64 = 4.0;
+/// Nas quadradas o apagamento gira este tanto mais rápido: o mesmo material
+/// num arco maior não forma um calombo.
+const TAIL_SPREAD: f64 = 4.0;
 
 // ---------------------------------------------------------------------------
 // Pontos de entrada
@@ -242,12 +244,10 @@ impl LayerFrame {
         seg.insert(2, fechamento_uniforme_comment(&plano));
     }
 
-    /// No fechamento uniforme o apagamento fica só em A: em X, a F da
-    /// oscilação, ele levaria o cordão muito além da borda.
-    fn closing_tail(&self, tail: WeldTail) -> WeldTail {
-        if !self.closing {
-            return tail;
-        }
+    /// O apagamento fica sempre em A, no lugar onde a solda terminou: em X, à
+    /// velocidade da oscilação, a tocha ainda acesa andaria 100 mm para fora
+    /// da peça. É um desvio de propósito do Python.
+    fn rotary_tail(&self, tail: WeldTail) -> WeldTail {
         let (x, a) = (tail.end.x.unwrap_or(0.0), tail.end.a.unwrap_or(0.0));
         WeldTail {
             start: Pos::xa(x, a - self.rotation_sign),
@@ -255,14 +255,10 @@ impl LayerFrame {
         }
     }
 
-    /// Velocidades do apagamento nas quadradas: no fechamento uniforme o mesmo
-    /// material sai num arco maior, sem formar um calombo sobre a última banda.
+    /// Velocidades do apagamento nas quadradas: o mesmo material sai num arco
+    /// maior, sem formar um calombo sobre a última banda.
     fn square_tail_speeds(&self, (feed, speed): (f64, f64)) -> (f64, f64) {
-        if self.closing {
-            (feed * CLOSING_TAIL_SPREAD, speed * CLOSING_TAIL_SPREAD)
-        } else {
-            (feed, speed)
-        }
+        (feed * TAIL_SPREAD, speed * TAIL_SPREAD)
     }
 
     /// Final de todo segmento: apagamento da tocha (prolongado ao longo do
@@ -429,7 +425,7 @@ fn build_linear_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
         tail.set(current_x, current_a_total, fr.x_end, current_a_total);
     }
 
-    let tail = fr.closing_tail(tail);
+    let tail = fr.rotary_tail(tail);
     let speeds = tail.torch_off_speeds(feed_linear, feed_angular, taxa_de_deposicao);
     fr.finish_segment(&mut seg, p, layer_num, &tail, speeds);
     seg
@@ -785,7 +781,7 @@ fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
         tail.set(x_fim, current_a_total, fr.x_end, current_a_total);
     }
 
-    let tail = fr.closing_tail(tail);
+    let tail = fr.rotary_tail(tail);
     let speeds =
         fr.square_tail_speeds(tail.torch_off_speeds(g.feed_x, g.feed_a, taxa_de_deposicao));
     fr.finish_segment(&mut seg, p, layer_num, &tail, speeds);
@@ -1025,7 +1021,7 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
         }
     }
 
-    let tail = fr.closing_tail(tail);
+    let tail = fr.rotary_tail(tail);
     let speeds =
         fr.square_tail_speeds(tail.torch_off_speeds(g.feed_x, g.feed_a, taxa_de_deposicao));
     fr.finish_segment(&mut seg, p, layer_num, &tail, speeds);
