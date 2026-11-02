@@ -1014,7 +1014,8 @@ impl BeadShape {
             width: finite_or(width, 8.0).max(0.2),
             height: finite_or(p.espessura_camada, 1.5).max(0.05),
             surface,
-            include_tail: p.fechamento_uniforme,
+            // Na chapa o cordão para antes da borda e termina no apagamento.
+            include_tail: p.fechamento_uniforme || p.welding_mode == WeldingMode::ChapaPlana,
         }
     }
 }
@@ -3376,6 +3377,9 @@ mod tests {
         );
         assert!(bead.include_tail);
         assert!(!BeadShape::from_params(&Params::default()).include_tail);
+        let mut plate = Params::default();
+        plate.apply_operation(Operation::ChapaPlana);
+        assert!(BeadShape::from_params(&plate).include_tail);
     }
 
     /// No fechamento uniforme ainda sai material depois do M102: o trecho de

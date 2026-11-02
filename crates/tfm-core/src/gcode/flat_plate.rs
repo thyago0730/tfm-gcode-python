@@ -10,11 +10,12 @@
 //! O Python tem dois ramos quase idênticos (orientação X e Y) que só diferem
 //! nas letras dos eixos e na ordem em que as coordenadas entram no `Pos`;
 //! aqui ambos passam por [`to_xy`], que faz esse mapeamento, mantendo a ordem
-//! de emissão e de operações aritméticas do original.
+//! de emissão e de operações aritméticas do original. O único desvio de
+//! propósito é o fim do cordão ([`stop_short`]).
 
 use super::common::{
     append_torch_disable, append_torch_enable, apply_smart_layers, build_footer, build_header, f1,
-    f3, layer_separator, py_max, Pos,
+    f3, layer_separator, py_max, torch_extinguish_delay, Pos,
 };
 use super::GenError;
 use crate::params::{Direction, FlatOrientation, Params};
@@ -63,6 +64,17 @@ fn g00_xy(o: FlatOrientation, weld: f64, cross: f64) -> String {
     format!("G00 X{} Y{}", f3(x), f3(y))
 }
 
+/// Onde o cordão de `from` a `to` para, para o apagamento de `tail_mm` terminar
+/// exatamente em `to`, em vez de passar da borda. Na chapa não há eixo A para
+/// girar no lugar. Desvio de propósito do Python. Um cordão mais curto que o
+/// apagamento vai até o fim, porque não há onde recuar.
+fn stop_short(from: f64, to: f64, tail_mm: f64) -> f64 {
+    if tail_mm <= 0.0 || tail_mm >= (to - from).abs() {
+        return to;
+    }
+    to - (to - from).signum() * tail_mm
+}
+
 /// `_build_flat_plate_segment`: uma camada da chapa.
 fn build_segment(p: &Params, layer_num: i64) -> Result<Vec<String>, GenError> {
     let afastamento = p.afastamento_tocha;
@@ -88,6 +100,8 @@ fn build_segment(p: &Params, layer_num: i64) -> Result<Vec<String>, GenError> {
 
     let taxa_de_deposicao = p.taxa();
     let feed_rate = apply_smart_layers(p, layer_num, taxa_de_deposicao);
+    // O que a tocha ainda deposita depois do M102.
+    let tail_mm = feed_rate * (torch_extinguish_delay(p) / 60.0);
 
     // Limites do movimento de solda (mesma fórmula nas duas orientações).
     let (weld_start, weld_end) = match p.direcao_soldagem {
@@ -139,14 +153,15 @@ fn build_segment(p: &Params, layer_num: i64) -> Result<Vec<String>, GenError> {
             seg.push(g00_xy(orientation, weld_start, current_cross));
             append_torch_enable(&mut seg, p);
             seg.push(format!("G00 Z{}", f3(z_layer)));
+            let parada = stop_short(weld_start, weld_end, tail_mm);
             seg.push(format!(
                 "G01 F{} {}{}",
                 f1(feed_rate),
                 weld_letter,
-                f3(weld_end)
+                f3(parada)
             ));
             last_weld_start = pos(orientation, weld_start, current_cross);
-            last_weld_end = pos(orientation, weld_end, current_cross);
+            last_weld_end = pos(orientation, parada, current_cross);
             append_torch_disable(
                 &mut seg,
                 p,
@@ -160,15 +175,21 @@ fn build_segment(p: &Params, layer_num: i64) -> Result<Vec<String>, GenError> {
         } else {
             // Zigue-zague no eixo de solda.
             target = if i % 2 == 0 { weld_end } else { weld_start };
+            let from = if i % 2 == 0 { weld_start } else { weld_end };
+            // A tocha só apaga no último cordão da camada.
+            let parada = if i == num_passes - 1 {
+                stop_short(from, target, tail_mm)
+            } else {
+                target
+            };
             seg.push(format!(
                 "G01 F{} {}{}",
                 f1(feed_rate),
                 weld_letter,
-                f3(target)
+                f3(parada)
             ));
-            let from = if i % 2 == 0 { weld_start } else { weld_end };
             last_weld_start = pos(orientation, from, current_cross);
-            last_weld_end = pos(orientation, target, current_cross);
+            last_weld_end = pos(orientation, parada, current_cross);
         }
 
         // Passo lateral.

@@ -77,6 +77,16 @@ fn check_case(case: &Case) -> Result<(), String> {
         if oscillation && tail {
             continue;
         }
+        // Na chapa não há eixo A: o cordão para antes da borda e o apagamento
+        // termina nela (ver `tests/apagamento_chapa.rs`). Ficam de fora o fim do
+        // cordão e o apagamento.
+        let plate = case.name.starts_with("chapa_");
+        let stop = expected
+            .get(i + 2)
+            .is_some_and(|l| l.starts_with("(APAGAMENTO DA TOCHA"));
+        if plate && (tail || stop) {
+            continue;
+        }
         if e != o {
             return Err(format!(
                 "{}: linha {}\n  esperado: {e}\n  obtido:   {o}",

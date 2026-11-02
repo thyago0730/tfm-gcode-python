@@ -157,15 +157,21 @@ fn apply_overrides(ui: &mut UiState, case: &Case) -> Vec<String> {
 /// em X, para fora da peça, e aqui ele gira em A. A linha logo depois de
 /// `(APAGAMENTO DA TOCHA` vem do programa gerado; todas as outras seguem exatas.
 fn with_rotary_tail(name: &str, mut expected: Vec<String>, got: &[String]) -> Vec<String> {
-    if !name.starts_with("osc_") {
+    let plate = name.starts_with("chapa_");
+    if !name.starts_with("osc_") && !plate {
         return expected;
     }
     let tails: Vec<usize> = (1..expected.len())
         .filter(|&i| expected[i - 1].starts_with("(APAGAMENTO DA TOCHA"))
         .collect();
     for i in tails {
-        if let Some(line) = got.get(i) {
-            expected[i] = line.clone();
+        // Na chapa o cordão para antes da borda: o fim dele, dois antes do
+        // comentário, também difere.
+        let stop = plate.then(|| i.checked_sub(3)).flatten();
+        for at in stop.into_iter().chain([i]) {
+            if let Some(line) = got.get(at) {
+                expected[at] = line.clone();
+            }
         }
     }
     expected
