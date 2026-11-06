@@ -357,6 +357,12 @@ pub struct Params {
     /// Python.
     #[serde(deserialize_with = "lenient_bool")]
     pub compensar_rotacao: bool,
+    /// Defasa os passes entre camadas: cada camada desloca a trama de passes
+    /// em uma fração do passo, para os cumes caírem nos vales da anterior. Sem
+    /// isso o relevo entre passes soma a cada camada. Só na Espiral. Não
+    /// existia no Python.
+    #[serde(deserialize_with = "lenient_bool")]
+    pub defasar_camadas: bool,
     #[serde(deserialize_with = "lenient_bool")]
     pub flat_single_direction: bool,
     pub flat_orientation: FlatOrientation,
@@ -486,6 +492,7 @@ impl Default for Params {
             spiral_close_ends: false,
             fechamento_uniforme: false,
             compensar_rotacao: false,
+            defasar_camadas: false,
             flat_single_direction: false,
             flat_orientation: FlatOrientation::X,
             operacao_interna: false,
@@ -621,6 +628,7 @@ impl Params {
                 self.spiral_close_ends = d.spiral_close_ends;
                 self.fechamento_uniforme = d.fechamento_uniforme;
                 self.compensar_rotacao = d.compensar_rotacao;
+                self.defasar_camadas = d.defasar_camadas;
             }
         }
         self.bead_width_calibration_factor = d.bead_width_calibration_factor;

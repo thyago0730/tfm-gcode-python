@@ -85,6 +85,7 @@ mod tip {
         Na Espiral acelera onde o material acumula, com menos sobremetal, pó e tempo. Nas quadradas, \
         junto com o fechamento uniforme, desacelera nas pontas, onde falta material, gastando mais \
         pó e tempo. A rotação muda até 2,5 vezes: confira se ela continua dentro da EPS.";
+    pub const DEFASAR_CAMADAS: &str = "Cada camada parte em um ângulo diferente (360° ÷ nº de         camadas), o que desloca os passes em X sem mudar o passo nem o X do programa. Os cumes de         uma camada caem nos vales da anterior, e o relevo entre passes não soma. Com uma camada         não muda nada.";
     pub const FECHAR_PONTAS: &str =
         "Dá uma volta completa parada no início e no fim para fechar o cordão.";
     pub const RECUAR: &str = "Vai ao Z e Y zero máquina (G53) antes de ligar a tocha.";
@@ -473,6 +474,14 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                     "Compensar rotação",
                     "compensar_rotacao",
                     tip::COMPENSAR_ROTACAO,
+                );
+            }
+            if op == Operation::Espiral {
+                f.flag(
+                    ui,
+                    "Defasar camadas",
+                    "defasar_camadas",
+                    tip::DEFASAR_CAMADAS,
                 );
             }
             if op == Operation::ChapaPlana {

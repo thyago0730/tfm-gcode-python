@@ -240,6 +240,7 @@ const FLAG_FIELDS: &[FlagField] = &[
     flag!("spiral_close_ends", spiral_close_ends),
     flag!("fechamento_uniforme", fechamento_uniforme),
     flag!("compensar_rotacao", compensar_rotacao),
+    flag!("defasar_camadas", defasar_camadas),
     flag!("flat_single_direction", flat_single_direction),
     flag!("operacao_interna", operacao_interna),
     flag!("multiperfil_point_by_point", multiperfil_point_by_point),
@@ -266,6 +267,7 @@ const PRESET_KEYS: &[&str] = &[
     "spiral_close_ends",
     "fechamento_uniforme",
     "compensar_rotacao",
+    "defasar_camadas",
     "lead_extras_enabled",
     "operacao_interna",
     "internal_face_clearance_x",
@@ -343,6 +345,7 @@ fn reset_keys(op: Operation) -> &'static [&'static str] {
             "spiral_close_ends",
             "fechamento_uniforme",
             "compensar_rotacao",
+            "defasar_camadas",
         ],
     }
 }

@@ -42,6 +42,20 @@ pub fn generate(p: &Params, timestamp: &str) -> Result<Vec<String>, GenError> {
     Ok(out)
 }
 
+/// Ângulo de partida da camada, para defasar os passes entre camadas. Numa
+/// hélice, girar a partida em `θ` desloca a trama de passes em X por `passo ×
+/// θ/360` sem mudar o passo nem o X do programa: com `N` camadas, partir em
+/// `360° × k/N` leva os cumes de cada camada para os vales das outras, e o
+/// relevo entre passes não soma. Os anéis das bordas seguem fechando tudo.
+/// Zero sem a opção ou com uma só camada.
+fn partida_defasada(p: &Params, camada: i64, rotation_sign: f64) -> f64 {
+    let n = p.num_camadas;
+    if !p.defasar_camadas || n < 2 {
+        return 0.0;
+    }
+    rotation_sign * 360.0 * (camada % n) as f64 / n as f64
+}
+
 /// `_build_spiral_segment`: uma camada da espiral.
 fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let afastamento = p.afastamento_tocha;
@@ -79,6 +93,7 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
         ),
     };
     let rotation_sign = p.rotation_sign();
+    let a_ini = partida_defasada(p, layer_num, rotation_sign);
     let angulo_total_a = total_rotacoes * 360.0 * rotation_sign;
     // Comprimento real da hélice por volta, para manter a velocidade de
     // deposição ao longo da trajetória combinada X+A.
@@ -97,6 +112,14 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     ];
     if let Some(c) = &plano {
         seg.push(fechamento_uniforme_comment(c));
+    }
+    if p.defasar_camadas && p.num_camadas >= 2 {
+        seg.push(format!(
+            "(DEFASAGEM DE PASSES: camada {}/{}, partida em A{})",
+            layer_num + 1,
+            p.num_camadas,
+            f3(a_ini)
+        ));
     }
     seg.push(format!("G00 Z{}", f3(z_seguranca)));
     // Sem o anel a hélice só toca a borda em um ponto da volta: o fechamento
@@ -123,7 +146,12 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
             ),
         );
     }
-    seg.push(format!("G00 X{} A0", f3(x_arc_start_calc)));
+    let a_partida = if a_ini == 0.0 {
+        "0".to_string()
+    } else {
+        f3(a_ini)
+    };
+    seg.push(format!("G00 X{} A{a_partida}", f3(x_arc_start_calc)));
     seg.push(format!("G00 Z{}", f3(z_layer)));
     if layer_num == 0 {
         seg.push("M0 (Confirme e pressione Start)".to_string());
@@ -132,11 +160,11 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
 
     let volta_fechamento = if fechar { rotation_sign * 360.0 } else { 0.0 };
     if fechar && perfil.is_none() {
-        let volta_a_ini = rotation_sign * 360.0;
+        let volta_a_ini = a_ini + rotation_sign * 360.0;
         seg.push(format!("G01 F{} A{}", f1(feed_angular), f3(volta_a_ini)));
     }
     let end_x = x_arc_end_calc;
-    let end_a = angulo_total_a + volta_fechamento;
+    let end_a = a_ini + angulo_total_a + volta_fechamento;
     if perfil.is_none() {
         seg.push(format!(
             "G01 F{} X{} A{}",
@@ -145,7 +173,7 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
             f3(end_a)
         ));
     }
-    let mut tail_start = Pos::xa(x_arc_start_calc, volta_fechamento);
+    let mut tail_start = Pos::xa(x_arc_start_calc, a_ini + volta_fechamento);
     let mut tail_end = Pos::xa(end_x, end_a);
     let mut fator_fim = 1.0;
     if let Some(perfil) = &perfil {
@@ -165,7 +193,7 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
             &mut seg,
             perfil,
             helice_fim + arco_final,
-            rotation_sign,
+            (a_ini, rotation_sign),
             feed_angular,
             |phi| {
                 let t = (phi - anel) / (helice_fim - anel).max(1e-9);
@@ -284,7 +312,7 @@ fn emit_compensated(
     seg: &mut Vec<String>,
     perfil: &RotationProfile,
     parada: f64,
-    rotation_sign: f64,
+    (a_ini, rotation_sign): (f64, f64),
     feed: f64,
     x_at: impl Fn(f64) -> f64,
 ) -> (Pos, Pos) {
@@ -301,10 +329,13 @@ fn emit_compensated(
     let e_ponto_de_regra = |c: f64| perfil.knots.iter().any(|k| (c - k).abs() < 1e-6);
     let (mut de, mut trecho_de) = (0.0, 0.0);
     let mut fator = perfil.quantized(0.0, cortes.first().copied().unwrap_or(parada));
-    let mut trecho = (Pos::xa(x_at(0.0), 0.0), Pos::xa(x_at(0.0), 0.0));
+    let mut trecho = (Pos::xa(x_at(0.0), a_ini), Pos::xa(x_at(0.0), a_ini));
     let mut grava = |seg: &mut Vec<String>, ate: f64, fator: f64, trecho_de: f64| {
         let (x0, x1) = (x_at(trecho_de), x_at(ate));
-        let (a0, a1) = (rotation_sign * trecho_de, rotation_sign * ate);
+        let (a0, a1) = (
+            a_ini + rotation_sign * trecho_de,
+            a_ini + rotation_sign * ate,
+        );
         if (x1 - x0).abs() > 1e-9 {
             seg.push(format!("G01 F{} X{} A{}", f1(feed * fator), f3(x1), f3(a1)));
         } else {
