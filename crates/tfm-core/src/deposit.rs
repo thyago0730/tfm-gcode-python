@@ -18,6 +18,7 @@ use std::f32::consts::TAU;
 
 use crate::gcode::common::{overlap_metrics, rotary_arc_bounds};
 use crate::params::{Params, WeldingMode};
+use crate::quality::QualityManager;
 use crate::toolpath::{PathPoint, Toolpath};
 
 /// Teto da compensação: a rotação sobe no máximo este fator sobre o nominal.
@@ -215,6 +216,81 @@ fn move_minutes(a: &PathPoint, b: &PathPoint) -> f32 {
     let dx = b.pos.x - a.pos.x;
     let da = b.a_deg - a.a_deg;
     (dx * dx + da * da).sqrt() / b.feed
+}
+
+/// Velocidade (mm/min sobre a peça) e aporte térmico (kJ/mm) locais do
+/// programa, no menor e no maior valor entre os trechos com a tocha ligada.
+/// O aporte nominal usa a velocidade pedida; a compensação de rotação muda a
+/// velocidade de cada trecho, e com ela o calor por milímetro.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct LocalProcess {
+    pub speed_min: f64,
+    pub speed_max: f64,
+    /// Aporte na velocidade máxima.
+    pub heat_min: f64,
+    /// Aporte na velocidade mínima.
+    pub heat_max: f64,
+}
+
+/// Trechos menores que isto não dizem nada da velocidade (mm).
+const MIN_SPEED_STEP_MM: f64 = 0.05;
+
+/// Velocidade sobre a peça no movimento de `a` até `b` (mm/min). O `F` do
+/// `G01` vale para a distância que o Mach3 lê, com os graus de A contando como
+/// milímetros; a velocidade real é essa taxa vezes a razão entre a distância
+/// sobre a peça e a lida. `None` com a tocha apagada, em `G0` ou num trecho
+/// curto demais.
+fn step_speed(a: &PathPoint, b: &PathPoint, mode: WeldingMode) -> Option<f64> {
+    if !b.torch_on || b.rapid || b.feed.is_nan() || b.feed <= 0.0 {
+        return None;
+    }
+    let feed = f64::from(b.feed);
+    if mode == WeldingMode::ChapaPlana {
+        let (dx, dy, dz) = (b.pos.x - a.pos.x, b.pos.y - a.pos.y, b.pos.z - a.pos.z);
+        let dist = f64::from((dx * dx + dy * dy + dz * dz).sqrt());
+        return (dist >= MIN_SPEED_STEP_MM).then_some(feed);
+    }
+    // No cilindro o avanço é X; na bolacha, o raio.
+    let (along, radius) = if mode == WeldingMode::Bolacha {
+        (b.radius - a.radius, (a.radius + b.radius) / 2.0)
+    } else {
+        (b.pos.x - a.pos.x, b.radius)
+    };
+    let da = b.a_deg - a.a_deg;
+    let read = f64::from((along * along + da * da).sqrt());
+    let arc = radius * da.to_radians();
+    let surface = f64::from((along * along + arc * arc).sqrt());
+    (read > 1e-6 && surface >= MIN_SPEED_STEP_MM).then(|| feed * surface / read)
+}
+
+/// Velocidade e aporte térmico locais; `None` sem trecho de solda.
+pub fn local_process(tp: &Toolpath, p: &Params) -> Option<LocalProcess> {
+    let (mut lo, mut hi) = (f64::MAX, f64::MIN);
+    let mut prev: Option<&PathPoint> = None;
+    for pt in tp.points() {
+        if let Some(v) = prev.and_then(|a| step_speed(a, pt, p.welding_mode)) {
+            lo = lo.min(v);
+            hi = hi.max(v);
+        }
+        prev = Some(pt);
+    }
+    if lo > hi {
+        return None;
+    }
+    let heat = |speed: f64| {
+        QualityManager::heat_input_kj_mm(
+            p.tensao_arco,
+            p.corrente_arco,
+            speed,
+            p.eficiencia_termica,
+        )
+    };
+    Some(LocalProcess {
+        speed_min: lo,
+        speed_max: hi,
+        heat_min: heat(hi),
+        heat_max: heat(lo),
+    })
 }
 
 /// Tempo de solda do percurso (min).

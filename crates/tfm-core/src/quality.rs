@@ -750,6 +750,59 @@ impl QualityManager {
         heat_j_mm / 1000.0
     }
 
+    /// Avisos do aporte térmico e da velocidade LOCAIS do programa, que
+    /// `process_warnings` não vê porque usa a velocidade pedida. Com EPS, valem
+    /// as faixas dela (`aporte_termico` em kJ/mm e `velocidade_de_deposicao` em
+    /// mm/min); sem faixa de aporte, as gerais de `process_warnings` (0,1 a
+    /// 3,0 kJ/mm). Chaves desconhecidas da EPS são ignoradas.
+    pub fn local_alerts(
+        limits: Option<&IndexMap<String, Limit>>,
+        local: &crate::deposit::LocalProcess,
+    ) -> Vec<String> {
+        let mut out = Vec::new();
+        match limits.and_then(|m| m.get("aporte_termico")) {
+            Some(lim) => {
+                if local.heat_max > lim.max {
+                    out.push(format!(
+                        "Aporte térmico local de {:.2} kJ/mm fora da faixa da EPS ({:.2} - {:.2}).",
+                        local.heat_max, lim.min, lim.max
+                    ));
+                }
+                if local.heat_min < lim.min {
+                    out.push(format!(
+                        "Aporte térmico local de {:.2} kJ/mm fora da faixa da EPS ({:.2} - {:.2}).",
+                        local.heat_min, lim.min, lim.max
+                    ));
+                }
+            }
+            None => {
+                if local.heat_max > 3.0 {
+                    out.push(format!(
+                        "Aporte térmico local muito alto ({:.2} kJ/mm). Risco de distorção/diluição excessiva.",
+                        local.heat_max
+                    ));
+                }
+                if local.heat_min < 0.1 {
+                    out.push(format!(
+                        "Aporte térmico local muito baixo ({:.2} kJ/mm). Risco de falta de fusão.",
+                        local.heat_min
+                    ));
+                }
+            }
+        }
+        if let Some(lim) = limits.and_then(|m| m.get("velocidade_de_deposicao")) {
+            for speed in [local.speed_max, local.speed_min] {
+                if speed > lim.max || speed < lim.min {
+                    out.push(format!(
+                        "Velocidade local de {speed:.0} mm/min fora da faixa da EPS ({:.0} - {:.0}).",
+                        lim.min, lim.max
+                    ));
+                }
+            }
+        }
+        out
+    }
+
     /// Diluição estimada (%) pela heurística do Python:
     /// `clamp(2.5 * (I / pó_g_min) - 2.0, 0, 100)`; `0.0` se não há pó.
     /// A velocidade não entra no modelo, mas é mantida pela assinatura.

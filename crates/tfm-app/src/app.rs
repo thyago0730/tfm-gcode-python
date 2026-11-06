@@ -137,6 +137,8 @@ pub struct TfmApp {
     last_operation: Operation,
     /// Chave do último resultado cujos invariantes já viraram aviso.
     last_warned_key: Option<u64>,
+    /// Chave do último resultado cujo aporte local fora da faixa já virou aviso.
+    last_alerted_key: Option<u64>,
 }
 
 impl TfmApp {
@@ -192,6 +194,7 @@ impl TfmApp {
             last_change: Instant::now(),
             last_operation,
             last_warned_key: None,
+            last_alerted_key: None,
         };
         app.notify(
             NotifyKind::Info,
@@ -236,6 +239,7 @@ impl TfmApp {
             last_change: Instant::now(),
             last_operation,
             last_warned_key: None,
+            last_alerted_key: None,
             cfg,
         }
     }
@@ -377,6 +381,16 @@ impl TfmApp {
         }
     }
 
+    /// Avisos do aporte térmico e da velocidade locais do resultado, contra a
+    /// faixa da EPS escolhida na rastreabilidade (ou as faixas gerais, sem EPS).
+    pub fn local_alerts(&self, result: &ComputeResult) -> Vec<String> {
+        let Some(local) = result.local.as_ref() else {
+            return Vec::new();
+        };
+        let wps = self.quality.wps(&result.params.traceability_eps);
+        QualityManager::local_alerts(wps.map(|w| &w.limits), local)
+    }
+
     /// Recolhe o resultado mais novo do trabalhador; invariantes violados
     /// viram um aviso, uma vez por chave.
     fn receive_result(&mut self) {
@@ -398,6 +412,16 @@ impl TfmApp {
                 result.invariants.join(" | ")
             );
             self.notify(NotifyKind::Aviso, text);
+        }
+        if self.last_alerted_key != Some(result.key) {
+            let alerts = self.local_alerts(&result);
+            if !alerts.is_empty() {
+                self.notify(
+                    NotifyKind::Aviso,
+                    format!("Processo: {}", alerts.join(" | ")),
+                );
+            }
+            self.last_alerted_key = Some(result.key);
         }
         self.result = Some(result);
     }
@@ -869,5 +893,67 @@ impl eframe::App for TfmApp {
 
     fn on_exit(&mut self) {
         self.persist_prefs();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tfm_core::config::AppConfig;
+    use tfm_core::quality::Limit;
+
+    fn resultado(eps: &str, compensar: bool) -> ComputeResult {
+        let mut p = Params::default();
+        p.apply_operation(Operation::Espiral);
+        p.fechamento_uniforme = true;
+        p.compensar_rotacao = compensar;
+        p.traceability_eps = eps.to_string();
+        crate::compute::compute_all(p, &AppConfig::default(), 1)
+    }
+
+    /// O aporte local vem contra a faixa da EPS escolhida: com a compensação a
+    /// Espiral acelera e o aporte cai abaixo do mínimo da EPS.
+    #[test]
+    fn local_heat_is_checked_against_the_chosen_wps() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut app = TfmApp::headless(dir.path());
+        app.quality.add_wps("EPS-1", None);
+        let nominal = resultado("", false).estimates.heat_input_kj_mm;
+        let wps = app
+            .quality
+            .wps
+            .iter_mut()
+            .find(|w| w.name == "EPS-1")
+            .unwrap_or_else(|| panic!("EPS cadastrada"));
+        wps.limits.insert(
+            "aporte_termico".to_string(),
+            Limit {
+                min: nominal * 0.9,
+                max: nominal * 1.1,
+            },
+        );
+        let sem = app.local_alerts(&resultado("EPS-1", false));
+        assert!(sem.is_empty(), "sem compensação cabe na faixa: {sem:?}");
+        let com = app.local_alerts(&resultado("EPS-1", true));
+        assert_eq!(com.len(), 1, "compensada acelera e sai da faixa: {com:?}");
+        assert!(com[0].contains("fora da faixa da EPS"), "{}", com[0]);
+        // Sem EPS escolhida valem as faixas gerais, e o padrão cabe nelas.
+        assert!(app.local_alerts(&resultado("", true)).is_empty());
+    }
+
+    /// Faixa de velocidade da EPS também vale para o valor local.
+    #[test]
+    fn local_speed_is_checked_against_the_chosen_wps() {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut app = TfmApp::headless(dir.path());
+        app.quality.add_wps("EPS-1", None);
+        if let Some(w) = app.quality.wps.iter_mut().find(|w| w.name == "EPS-1") {
+            w.limits.insert(
+                "velocidade_de_deposicao".to_string(),
+                Limit { min: 1.0, max: 2.0 },
+            );
+        }
+        let r = resultado("EPS-1", false);
+        assert!(!app.local_alerts(&r).is_empty());
     }
 }

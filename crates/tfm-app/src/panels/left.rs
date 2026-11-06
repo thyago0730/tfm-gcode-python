@@ -9,6 +9,7 @@ use egui::{
     Margin, Rect, RichText, ScrollArea, Sense, Stroke, StrokeKind, TextEdit, Ui,
 };
 use tfm_core::config::AppConfig;
+use tfm_core::deposit::LocalProcess;
 use tfm_core::params::{
     BolachaTipo, Direction, FlatOrientation, MultiperfilStrategy, Operation, ProfileShape, Rotation,
 };
@@ -124,6 +125,9 @@ struct Context {
     palette: Palette,
     /// `(heat input kJ/mm, diluição %)` do último resultado válido.
     kpis: Option<(f64, f64)>,
+    /// Aporte térmico local do último resultado válido e os avisos dele contra
+    /// a EPS escolhida.
+    local: Option<(LocalProcess, Vec<String>)>,
     powders: Vec<String>,
     operators: Vec<String>,
     wps: Vec<String>,
@@ -139,6 +143,11 @@ pub fn show_left(app: &mut TfmApp, ui: &mut Ui) {
             .as_ref()
             .filter(|r| r.field_errors.is_valid())
             .map(|r| (r.estimates.heat_input_kj_mm, r.estimates.dilution_pct)),
+        local: app
+            .result
+            .as_ref()
+            .filter(|r| r.field_errors.is_valid())
+            .and_then(|r| r.local.map(|l| (l, app.local_alerts(r)))),
         powders: powder_names(&app.cfg, &app.quality),
         operators: app.quality.operator_names(),
         wps: app.quality.wps_names(),
@@ -874,8 +883,37 @@ fn process_kpis(ctx: &Context, ui: &mut Ui) {
             kpi(ui, "Diluição Est.:", "- %", None);
         }
     }
+    if let Some((local, alerts)) = &ctx.local {
+        // Só aparece quando a compensação muda a velocidade: senão é o mesmo
+        // número de "Heat Input".
+        if !same_heat(local) || !alerts.is_empty() {
+            let color = if alerts.is_empty() {
+                palette.success
+            } else {
+                palette.danger
+            };
+            kpi(ui, "Aporte local:", &local_heat_text(local), Some(color));
+        }
+        for alert in alerts {
+            ui.label(RichText::new(alert).small().color(palette.danger));
+        }
+    }
     ui.weak(RichText::new(tip::HEAT_INPUT).small());
     ui.weak(RichText::new(tip::DILUICAO).small());
+}
+
+/// `true` quando o aporte local praticamente não varia (menos de 2%).
+fn same_heat(l: &LocalProcess) -> bool {
+    l.heat_max <= 0.0 || (l.heat_max - l.heat_min) / l.heat_max < 0.02
+}
+
+/// Faixa do aporte local: `0.65 - 1.10 kJ/mm`, ou um valor só quando não varia.
+fn local_heat_text(l: &LocalProcess) -> String {
+    if same_heat(l) {
+        format!("{:.2} kJ/mm", l.heat_max)
+    } else {
+        format!("{:.2} - {:.2} kJ/mm", l.heat_min, l.heat_max)
+    }
 }
 
 /// Combo "Consumível (Pó)": pós do config e materiais padrão; vazio no
@@ -969,4 +1007,28 @@ fn tab_rastreabilidade(f: &mut Form, ctx: &Context, ui: &mut Ui) {
             }
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_heat_shows_the_range_only_when_it_varies() {
+        let varia = LocalProcess {
+            speed_min: 600.0,
+            speed_max: 1500.0,
+            heat_min: 0.65,
+            heat_max: 1.1,
+        };
+        assert_eq!(local_heat_text(&varia), "0.65 - 1.10 kJ/mm");
+        assert!(!same_heat(&varia));
+        let igual = LocalProcess {
+            heat_min: 1.09,
+            heat_max: 1.1,
+            ..varia
+        };
+        assert_eq!(local_heat_text(&igual), "1.10 kJ/mm");
+        assert!(same_heat(&igual));
+    }
 }

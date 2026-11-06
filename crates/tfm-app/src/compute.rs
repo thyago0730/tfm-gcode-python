@@ -19,7 +19,7 @@ use std::time::Instant;
 use indexmap::IndexMap;
 use serde::Serialize;
 use tfm_core::config::AppConfig;
-use tfm_core::deposit::{self, DepositModel};
+use tfm_core::deposit::{self, DepositModel, LocalProcess};
 use tfm_core::estimates::{self, Estimates};
 use tfm_core::gcode::{self, GenError};
 use tfm_core::params::Params;
@@ -58,6 +58,9 @@ pub struct ComputeResult {
     pub dists: Vec<f64>,
     /// Simulação do material depositado (só nas peças cilíndricas).
     pub deposit: Option<Arc<DepositModel>>,
+    /// Velocidade e aporte térmico locais do programa (com a compensação,
+    /// diferentes dos nominais).
+    pub local: Option<LocalProcess>,
     /// [`params_key`] dos parâmetros + config que geraram este resultado.
     pub key: u64,
 }
@@ -77,6 +80,7 @@ impl ComputeResult {
             toolpath: Toolpath::default(),
             series: Series::default(),
             deposit: None,
+            local: None,
             osc: Vec::new(),
             dists: Vec::new(),
             key,
@@ -135,6 +139,7 @@ pub fn compute_all(params: Params, cfg: &AppConfig, key: u64) -> ComputeResult {
     let osc = toolpath::oscillation_series(&lines);
     let dists = toolpath::step_distances(&lines);
     let deposit = deposit_model(&params, &toolpath);
+    let local = deposit::local_process(&toolpath, &params);
     ComputeResult {
         params,
         lines,
@@ -147,6 +152,7 @@ pub fn compute_all(params: Params, cfg: &AppConfig, key: u64) -> ComputeResult {
         osc,
         dists,
         deposit,
+        local,
         key,
     }
 }
@@ -446,6 +452,38 @@ mod tests {
     use std::time::{Duration, Instant};
     use tfm_core::config::AppConfig;
     use tfm_core::params::Params;
+
+    /// O resultado traz a velocidade e o aporte térmico locais: a compensação
+    /// acelera a Espiral, então o aporte local cai abaixo do nominal.
+    #[test]
+    fn result_carries_the_local_heat_input() {
+        use tfm_core::params::Operation;
+        let cfg = AppConfig::default();
+        let mut p = Params::default();
+        p.apply_operation(Operation::Espiral);
+        p.fechamento_uniforme = true;
+        p.compensar_rotacao = true;
+        let r = compute_all(p.clone(), &cfg, 1);
+        let local = r.local.expect("aporte local");
+        assert!(
+            local.heat_min < r.estimates.heat_input_kj_mm * 0.85,
+            "{local:?} contra {}",
+            r.estimates.heat_input_kj_mm
+        );
+        let sem = compute_all(
+            Params {
+                compensar_rotacao: false,
+                ..p
+            },
+            &cfg,
+            2,
+        );
+        let l = sem.local.expect("aporte local");
+        assert!((l.heat_min - sem.estimates.heat_input_kj_mm).abs() < 0.05 * l.heat_min);
+        assert!(ComputeResult::failed(Params::default(), 3, "x")
+            .local
+            .is_none());
+    }
 
     /// Faz `poll()` até chegar um resultado ou estourar `timeout`.
     fn wait_result(handle: &mut ComputeHandle, timeout: Duration) -> Option<ComputeResult> {
