@@ -281,9 +281,19 @@ fn revolve(axis: f64, radius: f64, a_deg: f64) -> Vec3 {
 /// quem gira é a mesa, então com a mesa no sentido horário (A subindo) o cordão
 /// avança no anti-horário sobre a peça. Desvio de propósito do Python, que
 /// desenhava a peça em pé; o G-code não muda.
-fn on_table(height: f64, radius: f64, a_deg: f64) -> Vec3 {
+fn on_table(height: f64, radius: f64, y: f64, a_deg: f64) -> Vec3 {
+    // A tocha está em (X, Y) da máquina e a mesa girou `a`: o ponto na peça é
+    // esse par girado por `a`. Com Y = 0 é `(r·cos a, r·sin a)`.
     let rad = a_deg.to_radians();
-    vec3(radius * rad.cos(), radius * rad.sin(), height)
+    let (s, c) = rad.sin_cos();
+    vec3(radius * c - y * s, radius * s + y * c, height)
+}
+
+/// X e Y da máquina (mm) de um ponto da bolacha: o ponto na peça desfeito do
+/// giro da mesa. Com a tocha só em X, o Y é zero e o X é o raio.
+pub fn machine_xy(pt: &PathPoint) -> (f32, f32) {
+    let (s, c) = pt.a_deg.to_radians().sin_cos();
+    (pt.pos.x * c + pt.pos.y * s, -pt.pos.x * s + pt.pos.y * c)
 }
 
 /// Rotação da placa (voltas por minuto do eixo A) no movimento de `a` até `b`,
@@ -297,7 +307,11 @@ pub fn plate_rpm(a: &PathPoint, b: &PathPoint, mode: WeldingMode) -> Option<f32>
     }
     let da = b.a_deg - a.a_deg;
     let (dx, dz) = match mode {
-        WeldingMode::Bolacha => (b.radius - a.radius, b.pos.z - a.pos.z),
+        WeldingMode::Bolacha => {
+            // Na bolacha o Y da máquina também entra na distância lida.
+            let dy = machine_xy(b).1 - machine_xy(a).1;
+            (b.radius - a.radius, (b.pos.z - a.pos.z).hypot(dy))
+        }
         _ => (b.pos.x - a.pos.x, b.radius - a.radius),
     };
     let dist = (dx * dx + dz * dz + da * da).sqrt();
@@ -431,11 +445,12 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
                 if !rapid {
                     for (t, a) in angular_steps(prev.a, m.a) {
                         let r = prev.x + (m.x - prev.x) * t;
+                        let y = prev.y + (m.y - prev.y) * t;
                         let height = prev.z + (m.z - prev.z) * t;
-                        out.push(frame.point(on_table(height, r, a), r, a), r);
+                        out.push(frame.point(on_table(height, r, y, a), r, a), r);
                     }
                 }
-                out.push(frame.point(on_table(m.z, m.x, m.a), m.x, m.a), m.x);
+                out.push(frame.point(on_table(m.z, m.x, m.y, m.a), m.x, m.a), m.x);
             }
             Mapping::Cylindrical => {
                 let r = radius_at(m.z);

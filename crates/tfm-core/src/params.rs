@@ -156,6 +156,19 @@ pub enum BolachaOscForma {
     Quadrada,
 }
 
+/// Eixo em que a tocha oscila na bolacha (`bolacha_osc_eixo`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BolachaOscEixo {
+    /// O X (raio) vai e volta: a onda varre a largura do cordão.
+    #[default]
+    #[serde(rename = "Radial (X)")]
+    X,
+    /// A tocha vai e volta em Y, para frente e para trás, enquanto a mesa gira
+    /// na velocidade pedida. Y0 é o centro da onda.
+    #[serde(rename = "Tangencial (Y)")]
+    Y,
+}
+
 /// Sentido do primeiro movimento radial da oscilação da bolacha.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BolachaOscSentido {
@@ -432,6 +445,8 @@ pub struct Params {
     #[serde(deserialize_with = "lenient_bool")]
     pub bolacha_oscilar: bool,
     pub bolacha_osc_forma: BolachaOscForma,
+    /// Eixo da oscilação: X (radial) ou Y (a tocha para frente e para trás).
+    pub bolacha_osc_eixo: BolachaOscEixo,
     pub bolacha_osc_sentido: BolachaOscSentido,
     /// Período ao longo do arco (mm): quanto da trajetória um ciclo percorre.
     #[serde(deserialize_with = "lenient_f64")]
@@ -559,6 +574,7 @@ impl Default for Params {
             bolacha_stop_between: false,
             bolacha_oscilar: false,
             bolacha_osc_forma: BolachaOscForma::Triangular,
+            bolacha_osc_eixo: BolachaOscEixo::X,
             bolacha_osc_sentido: BolachaOscSentido::ParaFora,
             bolacha_osc_periodo_mm: 10.0,
             bolacha_osc_fase_camada_perc: 0.0,
@@ -654,6 +670,7 @@ impl Params {
                 self.bolacha_stop_between = d.bolacha_stop_between;
                 self.bolacha_oscilar = d.bolacha_oscilar;
                 self.bolacha_osc_forma = d.bolacha_osc_forma;
+                self.bolacha_osc_eixo = d.bolacha_osc_eixo;
                 self.bolacha_osc_sentido = d.bolacha_osc_sentido;
                 self.bolacha_osc_periodo_mm = d.bolacha_osc_periodo_mm;
                 self.bolacha_osc_fase_camada_perc = d.bolacha_osc_fase_camada_perc;

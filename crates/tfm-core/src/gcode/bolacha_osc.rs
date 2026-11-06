@@ -1,19 +1,25 @@
-//! Oscilação na Bolacha: o X (raio) vai e volta em torno da trajetória, espiral
-//! ou anéis, enquanto a mesa gira. Não existia no Python.
+//! Oscilação na Bolacha, em torno da trajetória (espiral ou anéis) enquanto a
+//! mesa gira. Não existia no Python.
+//!
+//! Dois eixos ([`BolachaOscEixo`]):
+//!
+//! * **X (radial)**: o raio vai e volta e a onda varre a largura do cordão. O
+//!   passo radial usa a largura varrida (cordão + oscilação) e a trajetória
+//!   central fica meia oscilação para dentro de cada borda. O `F` de cada trecho
+//!   é escalado pela distância real sobre a peça, então a velocidade de solda
+//!   segue a pedida.
+//! * **Y (tangencial)**: a tocha vai e volta em Y, para frente e para trás,
+//!   centrada em Y0, enquanto a mesa gira na velocidade pedida. O X segue a
+//!   trajetória e o passo radial é o da bolacha sem oscilar. O `F` de cada trecho
+//!   faz o arco da mesa ser percorrido na velocidade de solda, e o Y corre junto
+//!   no mesmo tempo; a velocidade da tocha em relação à peça então cai quando o Y
+//!   anda no sentido da mesa e sobe no outro, e pode parar ou recuar.
 //!
 //! * **Onda** ([`BolachaOscForma`]): triangular (retas com vértice nos picos),
-//!   senoidal (`bolacha_osc_pontos_ciclo` pontos por ciclo) ou quadrada (o X
-//!   sobe e desce com a mesa parada).
-//! * **Período** em mm ao longo do arco: um ciclo percorre `periodo` da
-//!   trajetória, então perto do centro, onde o arco é curto, cabem menos ciclos
-//!   por volta.
-//! * **Envelope**: a trajetória central fica meia oscilação para dentro de cada
-//!   borda, e o envelope da onda fecha em `r_int` e `r_ext`. O passo radial usa
-//!   a largura varrida (cordão + oscilação).
-//! * **Velocidade**: o `F` de cada trecho é escalado pela razão entre a
-//!   distância que o Mach3 lê (graus de A contam como milímetros) e a distância
-//!   real sobre a peça, então a velocidade de solda segue a pedida. Os
-//!   movimentos só em X usam `velocidade_oscilacao_mm_min` (ou a de solda).
+//!   senoidal (`bolacha_osc_pontos_ciclo` pontos por ciclo) ou quadrada (o eixo
+//!   sobe e desce com a mesa parada, na velocidade da oscilação).
+//! * **Período** em mm ao longo do arco da mesa: um ciclo percorre `periodo`,
+//!   então perto do centro, onde o arco é curto, cabem menos ciclos por volta.
 //! * **Fase entre camadas**: cada camada começa a onda mais adiante, para os
 //!   picos não empilharem.
 
@@ -23,7 +29,9 @@ use super::common::{
     append_torch_disable, append_torch_enable, apply_smart_layers, f1, f3, layer_separator, py_max,
     py_min, Pos,
 };
-use crate::params::{BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, Params};
+use crate::params::{
+    BolachaOscEixo, BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, Params,
+};
 
 /// Passo fino em que a fase da onda é integrada (graus).
 const DEG_STEP: f64 = 0.5;
@@ -35,9 +43,9 @@ pub const MIN_PONTOS_CICLO: f64 = 6.0;
 const DEG_PER_STEP: f64 = 10.0;
 /// Tolerância para considerar dois valores iguais.
 const EPS: f64 = 1e-9;
-/// O Mach3 interpola em reta em X e A, então o raio muda ao longo de cada
-/// linha e a velocidade sobre a peça varia junto. Cada linha muda o raio em no
-/// máximo esta fração dele, o que segura a variação em torno de metade disso.
+/// No eixo X o Mach3 interpola em reta em X e A, então o raio muda ao longo de
+/// cada linha e a velocidade sobre a peça varia junto. Cada linha muda o raio em
+/// no máximo esta fração dele, o que segura a variação em torno de metade disso.
 const MAX_DX_REL: f64 = 0.08;
 
 /// Faixa radial da oscilação: limites da peça, faixa do centro do cordão e o
@@ -46,11 +54,12 @@ const MAX_DX_REL: f64 = 0.08;
 pub struct Faixa {
     pub r_int: f64,
     pub r_ext: f64,
-    /// Menor raio do centro do cordão: `r_int` mais meia oscilação.
+    /// Menor raio do centro do cordão. No eixo X, `r_int` mais meia oscilação.
     pub c_int: f64,
-    /// Maior raio do centro do cordão: `r_ext` menos meia oscilação.
+    /// Maior raio do centro do cordão. No eixo X, `r_ext` menos meia oscilação.
     pub c_ext: f64,
-    /// Passo radial: `(largura + oscilação) × (1 − sobreposição)`.
+    /// Passo radial. No eixo X, `(largura + oscilação) × (1 − sobreposição)`; no
+    /// Y, o da bolacha sem oscilar.
     pub passo: f64,
     pub num_voltas: i64,
 }
@@ -58,7 +67,12 @@ pub struct Faixa {
 pub fn faixa(p: &Params) -> Faixa {
     let r_ext = p.diametro / 2.0;
     let r_int = py_max(p.diametro_interno / 2.0, p.largura_cordao / 2.0);
-    let amp = py_max(p.oscilacao_comprimento, 0.0);
+    // No eixo Y o X não oscila: a faixa e o passo são os da bolacha comum.
+    let amp = if p.bolacha_osc_eixo == BolachaOscEixo::X {
+        py_max(p.oscilacao_comprimento, 0.0)
+    } else {
+        0.0
+    };
     let (c_int, c_ext) = if r_ext - r_int > amp {
         (r_int + amp / 2.0, r_ext - amp / 2.0)
     } else {
@@ -85,14 +99,28 @@ pub fn faixa(p: &Params) -> Faixa {
     }
 }
 
-/// Quanto o caminho com a onda é mais longo que o sem ela, e quanto tempo de
+/// Quanto o tempo do caminho com a onda é maior que o sem ela, e quanto tempo de
 /// espera cada milímetro de trajetória ainda traz (s/mm), para as estimativas.
+///
+/// No eixo X a onda alonga o caminho. No Y, com o movimento junto da mesa, o
+/// tempo é o da mesa; só a onda quadrada soma o tempo dos degraus, que andam
+/// com a mesa parada na velocidade da oscilação.
 pub fn weave_cost(p: &Params) -> (f64, f64) {
     let h = py_max(p.oscilacao_comprimento, 0.0) / 2.0;
     let periodo = py_max(p.bolacha_osc_periodo_mm, MIN_PERIODO_MM);
-    let fator = match p.bolacha_osc_forma {
-        BolachaOscForma::Triangular => (1.0 + (4.0 * h / periodo).powi(2)).sqrt(),
-        BolachaOscForma::Senoidal => {
+    let taxa = py_max(p.taxa(), 1e-6);
+    let feed_x = if p.velocidade_oscilacao_mm_min != 0.0 {
+        p.velocidade_oscilacao_mm_min
+    } else {
+        taxa
+    };
+    let fator = match (p.bolacha_osc_forma, p.bolacha_osc_eixo) {
+        (BolachaOscForma::Quadrada, _) => 1.0 + 4.0 * h / periodo * taxa / feed_x,
+        (_, BolachaOscEixo::Y) => 1.0,
+        (BolachaOscForma::Triangular, BolachaOscEixo::X) => {
+            (1.0 + (4.0 * h / periodo).powi(2)).sqrt()
+        }
+        (BolachaOscForma::Senoidal, BolachaOscEixo::X) => {
             let n = 64;
             (0..n)
                 .map(|k| {
@@ -102,7 +130,6 @@ pub fn weave_cost(p: &Params) -> (f64, f64) {
                 .sum::<f64>()
                 / n as f64
         }
-        BolachaOscForma::Quadrada => 1.0 + 4.0 * h / periodo,
     };
     (fator, 2.0 * py_max(p.bolacha_osc_espera_s, 0.0) / periodo)
 }
@@ -120,8 +147,9 @@ struct Quebra {
 #[derive(Clone, Copy)]
 struct Onda {
     forma: BolachaOscForma,
+    eixo: BolachaOscEixo,
     meia: f64,
-    /// `+1` começa para fora, `-1` para dentro.
+    /// `+1` começa para fora (X) ou para Y positivo; `-1`, o contrário.
     sentido: f64,
     periodo: f64,
     pontos: f64,
@@ -131,6 +159,7 @@ impl Onda {
     fn new(p: &Params) -> Onda {
         Onda {
             forma: p.bolacha_osc_forma,
+            eixo: p.bolacha_osc_eixo,
             meia: py_max(p.oscilacao_comprimento, 0.0) / 2.0,
             sentido: match p.bolacha_osc_sentido {
                 BolachaOscSentido::ParaFora => 1.0,
@@ -141,7 +170,7 @@ impl Onda {
         }
     }
 
-    /// Deslocamento do centro (mm, positivo para fora) na fase `fase` (ciclos).
+    /// Deslocamento (mm) na fase `fase` (ciclos), no eixo da oscilação.
     fn deslocamento(&self, fase: f64) -> f64 {
         let f = fase.rem_euclid(1.0);
         let v = match self.forma {
@@ -210,11 +239,12 @@ impl Onda {
 }
 
 /// Vértice do caminho: ângulo percorrido desde o início da sessão (graus, sem
-/// sinal) e X absoluto.
+/// sinal), X e Y absolutos.
 #[derive(Clone, Copy, Debug)]
 struct Vertice {
     theta: f64,
     x: f64,
+    y: f64,
     pico: bool,
 }
 
@@ -236,18 +266,26 @@ impl<'a> Caminhante<'a> {
             theta: 0.0,
             fase,
         };
-        c.empurra(0.0, x0 + onda.deslocamento(fase), false);
+        c.empurra(0.0, x0, onda.deslocamento(fase), false);
         c
     }
 
-    fn empurra(&mut self, theta: f64, x: f64, pico: bool) {
+    /// Soma o deslocamento `desloc` da onda ao eixo dela: X ao raio, ou Y.
+    fn empurra(&mut self, theta: f64, x_central: f64, desloc: f64, pico: bool) {
+        let (x, y) = match self.onda.eixo {
+            BolachaOscEixo::X => (x_central + desloc, 0.0),
+            BolachaOscEixo::Y => (x_central, desloc),
+        };
         let x = py_max(self.limites.0, py_min(self.limites.1, x));
         if let Some(ultimo) = self.vertices.last() {
-            if (ultimo.theta - theta).abs() < EPS && (ultimo.x - x).abs() < EPS {
+            if (ultimo.theta - theta).abs() < EPS
+                && (ultimo.x - x).abs() < EPS
+                && (ultimo.y - y).abs() < EPS
+            {
                 return;
             }
         }
-        self.vertices.push(Vertice { theta, x, pico });
+        self.vertices.push(Vertice { theta, x, y, pico });
     }
 
     /// Anda até `ate` graus com a trajetória central `x_central(theta)`.
@@ -268,17 +306,22 @@ impl<'a> Caminhante<'a> {
                         let nominal = x_central(t);
                         if q.salto {
                             let antes = self.onda.deslocamento(bf - 1e-9);
-                            self.empurra(t, nominal + antes, false);
+                            self.empurra(t, nominal, antes, false);
                         }
-                        self.empurra(t, nominal + self.onda.deslocamento(bf), q.pico);
+                        self.empurra(t, nominal, self.onda.deslocamento(bf), q.pico);
                     }
                 }
             }
             self.theta = proximo;
             self.fase = fim;
         }
-        let x = x_central(self.theta) + self.onda.deslocamento(self.fase);
-        self.empurra(self.theta, x, false);
+        let central = x_central(self.theta);
+        self.empurra(
+            self.theta,
+            central,
+            self.onda.deslocamento(self.fase),
+            false,
+        );
     }
 
     /// Entrega os vértices novos, mantendo o último para a continuidade.
@@ -298,6 +341,7 @@ struct Emissor {
     taxa: f64,
     feed_x: f64,
     espera: f64,
+    eixo: BolachaOscEixo,
     /// Ângulo da sessão no início do trecho atual (graus).
     base: f64,
     ultimo: (f64, f64),
@@ -315,13 +359,35 @@ impl Emissor {
         for par in vertices.windows(2) {
             let (a, b) = (par[0], par[1]);
             let dtheta = b.theta - a.theta;
-            let dx = b.x - a.x;
-            if dtheta.abs() < EPS && dx.abs() < EPS {
+            let (dx, dy) = (b.x - a.x, b.y - a.y);
+            if dtheta.abs() < EPS && dx.abs() < EPS && dy.abs() < EPS {
                 continue;
             }
             let destino = (b.x, self.a_de(b.theta));
             if dtheta.abs() < EPS {
-                seg.push(format!("G01 F{} X{}", f1(self.feed_x), f3(b.x)));
+                // Só o eixo da oscilação anda, com a mesa parada.
+                let palavra = match self.eixo {
+                    BolachaOscEixo::X => format!("X{}", f3(b.x)),
+                    BolachaOscEixo::Y => format!("Y{}", f3(b.y)),
+                };
+                seg.push(format!("G01 F{} {palavra}", f1(self.feed_x)));
+            } else if self.eixo == BolachaOscEixo::Y {
+                // A mesa faz o arco na velocidade de solda e o Y corre junto no
+                // mesmo tempo: o F é o que o Mach3 lê dividido por esse tempo.
+                let raio = py_max((a.x + b.x) / 2.0, 2.0);
+                let arco = raio * dtheta.to_radians();
+                let lido = (dx * dx + dy * dy + dtheta * dtheta).sqrt();
+                let feed = self.taxa * lido / arco;
+                let mut linha = format!("G01 F{}", f1(feed));
+                if dx.abs() >= 5e-4 {
+                    linha.push_str(&format!(" X{}", f3(b.x)));
+                }
+                if dy.abs() >= 5e-4 || (b.y - a.y).abs() >= 5e-4 {
+                    linha.push_str(&format!(" Y{}", f3(b.y)));
+                }
+                linha.push_str(&format!(" A{}", f3(destino.1)));
+                seg.push(linha);
+                self.cauda = (b.x, self.a_de(a.theta));
             } else {
                 let raio = py_max((a.x + b.x) / 2.0, 2.0);
                 let partes = ((dx.abs() / (MAX_DX_REL * raio)).ceil() as usize).max(1);
@@ -364,10 +430,12 @@ fn nome_da_forma(f: BolachaOscForma) -> &'static str {
     }
 }
 
-fn nome_do_sentido(s: BolachaOscSentido) -> &'static str {
-    match s {
-        BolachaOscSentido::ParaFora => "para fora",
-        BolachaOscSentido::ParaDentro => "para dentro",
+fn nome_do_primeiro(eixo: BolachaOscEixo, s: BolachaOscSentido) -> &'static str {
+    match (eixo, s) {
+        (BolachaOscEixo::X, BolachaOscSentido::ParaFora) => "para fora",
+        (BolachaOscEixo::X, BolachaOscSentido::ParaDentro) => "para dentro",
+        (BolachaOscEixo::Y, BolachaOscSentido::ParaFora) => "Y positivo",
+        (BolachaOscEixo::Y, BolachaOscSentido::ParaDentro) => "Y negativo",
     }
 }
 
@@ -378,10 +446,19 @@ fn angular_feed(taxa: f64, x: f64) -> f64 {
     py_min(rpm, 20.0) * 360.0
 }
 
+/// `G00` que leva a tocha ao início da onda: X, Y quando a onda é em Y, e A.
+fn posiciona(eixo: BolachaOscEixo, v: &Vertice, a: f64) -> String {
+    match eixo {
+        BolachaOscEixo::X => format!("G00 X{} A{}", f3(v.x), f3(a)),
+        BolachaOscEixo::Y => format!("G00 X{} Y{} A{}", f3(v.x), f3(v.y), f3(a)),
+    }
+}
+
 /// Uma camada da bolacha com oscilação.
 pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
     let f = faixa(p);
     let onda = Onda::new(p);
+    let eixo = p.bolacha_osc_eixo;
     let z_layer = (layer_num as f64 * p.espessura_camada) + p.afastamento_tocha;
     let z_seguranca = z_layer + p.afastamento_seguranca;
     let taxa = apply_smart_layers(p, layer_num, p.taxa());
@@ -405,17 +482,21 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
         format!("(--- CAMADA {} ---)", layer_num + 1),
         "(MODO: BOLACHA - FACE CIRCULAR COM OSCILACAO)".to_string(),
         format!(
-            "(OSCILACAO: {}, {:.1} mm, periodo {:.1} mm, primeiro {})",
+            "(OSCILACAO: {}, eixo {}, {:.1} mm, periodo {:.1} mm, primeiro {})",
             nome_da_forma(p.bolacha_osc_forma),
+            match eixo {
+                BolachaOscEixo::X => "X",
+                BolachaOscEixo::Y => "Y",
+            },
             p.oscilacao_comprimento,
             onda.periodo,
-            nome_do_sentido(p.bolacha_osc_sentido)
+            nome_do_primeiro(eixo, p.bolacha_osc_sentido)
         ),
         format!("G00 Z{}", f3(z_seguranca)),
     ];
 
     let mut cam = Caminhante::novo(&onda, limites, fase0, x_start);
-    seg.push(format!("G00 X{} A{}", f3(cam.vertices[0].x), f3(a_ini)));
+    seg.push(posiciona(eixo, &cam.vertices[0], a_ini));
     seg.push(format!("G00 Z{}", f3(z_layer)));
     if layer_num == 0 {
         seg.push("M0 (Confirme e pressione Start)".to_string());
@@ -428,6 +509,7 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
         taxa,
         feed_x,
         espera: py_max(p.bolacha_osc_espera_s, 0.0),
+        eixo,
         base: 0.0,
         ultimo: (cam.vertices[0].x, a_ini),
         cauda: (cam.vertices[0].x, a_ini),
@@ -447,16 +529,12 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
                     // Nova sessão: a onda recomeça na fase da camada.
                     em.base += cam.theta;
                     cam = Caminhante::novo(&onda, limites, fase0, x_pos);
-                    seg.push(format!(
-                        "G00 X{} A{}",
-                        f3(cam.vertices[0].x),
-                        f3(em.a_de(0.0))
-                    ));
+                    seg.push(posiciona(eixo, &cam.vertices[0], em.a_de(0.0)));
                     seg.push(format!("G00 Z{}", f3(z_layer)));
                     append_torch_enable(&mut seg, p);
                     em.ultimo = (cam.vertices[0].x, em.a_de(0.0));
                 } else if v == 0 {
-                    seg.push(format!("G00 X{} A{}", f3(cam.vertices[0].x), f3(a_ini)));
+                    seg.push(posiciona(eixo, &cam.vertices[0], a_ini));
                 }
                 let inicio = cam.theta;
                 cam.anda(inicio + 360.0, |_| x_pos);
@@ -513,6 +591,10 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
         Some(py_max(em.ultimo.0, 1e-6)),
     );
     seg.push(format!("G00 Z{}", f3(z_seguranca)));
+    if eixo == BolachaOscEixo::Y {
+        // A tocha volta ao centro da onda para a próxima camada e para o fim.
+        seg.push(format!("G00 Y{}", f3(0.0)));
+    }
     seg.push(layer_separator(p, layer_num));
     seg
 }

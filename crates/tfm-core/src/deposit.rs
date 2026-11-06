@@ -19,6 +19,7 @@ use std::f32::consts::TAU;
 use crate::gcode::common::{overlap_metrics, rotary_arc_bounds};
 use crate::params::{Params, WeldingMode};
 use crate::quality::QualityManager;
+use crate::toolpath::machine_xy;
 use crate::toolpath::{PathPoint, Toolpath};
 
 /// Teto da compensação: a rotação sobe no máximo este fator sobre o nominal.
@@ -250,12 +251,17 @@ fn step_speed(a: &PathPoint, b: &PathPoint, mode: WeldingMode) -> Option<f64> {
         let dist = f64::from((dx * dx + dy * dy + dz * dz).sqrt());
         return (dist >= MIN_SPEED_STEP_MM).then_some(feed);
     }
-    // No cilindro o avanço é X; na bolacha, o raio.
-    let (along, radius) = if mode == WeldingMode::Bolacha {
-        (b.radius - a.radius, (a.radius + b.radius) / 2.0)
-    } else {
-        (b.pos.x - a.pos.x, b.radius)
-    };
+    if mode == WeldingMode::Bolacha {
+        // Distância lida pelo Mach3 (X, Y da máquina e graus de A) contra a
+        // percorrida na peça, que é o deslocamento do ponto no referencial dela.
+        let ((xa, ya), (xb, yb)) = (machine_xy(a), machine_xy(b));
+        let da = b.a_deg - a.a_deg;
+        let read = f64::from(((xb - xa).powi(2) + (yb - ya).powi(2) + da * da).sqrt());
+        let chord = f64::from((b.pos.x - a.pos.x).hypot(b.pos.y - a.pos.y));
+        return (read > 1e-6 && chord >= MIN_SPEED_STEP_MM).then(|| feed * chord / read);
+    }
+    // No cilindro o avanço é X.
+    let (along, radius) = (b.pos.x - a.pos.x, b.radius);
     let da = b.a_deg - a.a_deg;
     let read = f64::from((along * along + da * da).sqrt());
     let arc = radius * da.to_radians();

@@ -11,7 +11,8 @@ use tfm_core::deposit::local_process;
 use tfm_core::estimates;
 use tfm_core::gcode::generate;
 use tfm_core::params::{
-    BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, Operation, Params, Rotation,
+    BolachaOscEixo, BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, Operation, Params,
+    Rotation,
 };
 use tfm_core::quality::QualityManager;
 use tfm_core::toolpath::build_toolpath;
@@ -422,4 +423,320 @@ fn old_procedures_without_the_new_fields_still_load() {
     let back: Params = serde_json::from_str(&json).expect("relê");
     assert_eq!(back.bolacha_osc_forma, BolachaOscForma::Senoidal);
     assert!(back.bolacha_oscilar);
+}
+
+// ---------------------------------------------------------------------------
+// Oscilação em Y: a mesa gira e a tocha vai e volta no eixo Y.
+// ---------------------------------------------------------------------------
+
+fn bolacha_y(forma: BolachaOscForma) -> Params {
+    let mut p = bolacha(forma);
+    p.bolacha_osc_eixo = BolachaOscEixo::Y;
+    p
+}
+
+fn aneis_y(forma: BolachaOscForma) -> Params {
+    let mut p = bolacha_y(forma);
+    p.bolacha_tipo = BolachaTipo::Aneis;
+    p
+}
+
+/// Um movimento de solda como o Mach3 lê: deslocamento em X e Y (mm), em A
+/// (graus) e o F. `x` é o raio médio do trecho.
+struct Mov {
+    dx: f64,
+    dy: f64,
+    da: f64,
+    f: f64,
+    x: f64,
+    linha: String,
+}
+
+fn movimentos(lines: &[String]) -> Vec<Mov> {
+    let (mut x, mut y, mut a) = (0.0, 0.0, 0.0);
+    let mut out = Vec::new();
+    for l in lines {
+        let is_move = l.starts_with("G00") || l.starts_with("G01");
+        if !is_move || l.contains('Z') {
+            continue;
+        }
+        let (nx, ny, na) = (
+            word(l, 'X').unwrap_or(x),
+            word(l, 'Y').unwrap_or(y),
+            word(l, 'A').unwrap_or(a),
+        );
+        if l.starts_with("G01") {
+            if let Some(f) = word(l, 'F') {
+                out.push(Mov {
+                    dx: nx - x,
+                    dy: ny - y,
+                    da: na - a,
+                    f,
+                    x: (nx + x) / 2.0,
+                    linha: l.clone(),
+                });
+            }
+        }
+        (x, y, a) = (nx, ny, na);
+    }
+    out
+}
+
+/// `(y, a relativo)` dos vértices do anel `v` dentro da primeira volta, com Y
+/// modal como o controlador.
+fn ring_y(lines: &[String], v: usize) -> Vec<(f64, f64)> {
+    let marker = format!("(--- ANEL {v}/");
+    let (mut inside, mut y_now, mut a_now, mut a0) = (false, 0.0, 0.0, None);
+    let mut out = Vec::new();
+    for l in lines {
+        if l.starts_with("(--- ANEL") {
+            inside = l.starts_with(&marker);
+        }
+        if (l.starts_with("G00") || l.starts_with("G01")) && !l.contains('Z') {
+            let a_before = a_now;
+            y_now = word(l, 'Y').unwrap_or(y_now);
+            a_now = word(l, 'A').unwrap_or(a_now);
+            if inside && l.starts_with("G01") {
+                let start = *a0.get_or_insert(a_before);
+                let rel = (a_now - start).abs();
+                if rel <= 360.0 + 1e-6 {
+                    out.push((y_now, rel));
+                }
+            }
+        }
+    }
+    out
+}
+
+#[test]
+fn y_axis_swings_around_y_zero_by_the_configured_length() {
+    for forma in FORMAS {
+        let lines = generate(&aneis_y(forma)).expect("gera");
+        let ys: Vec<f64> = ring_y(&lines, 2).iter().map(|(y, _)| *y).collect();
+        let (min, max) = ys
+            .iter()
+            .fold((f64::MAX, f64::MIN), |(a, b), y| (a.min(*y), b.max(*y)));
+        assert!(
+            (max - min - 4.0).abs() < 0.2,
+            "{forma:?}: Y oscilou {:.2} mm em vez de 4",
+            max - min
+        );
+        assert!(
+            (max + min).abs() < 0.3,
+            "{forma:?}: a onda fica centrada em Y0: de {min:.2} a {max:.2}"
+        );
+    }
+}
+
+/// Com a oscilação em Y o X segue a trajetória da bolacha sem oscilar: o
+/// passo radial é o mesmo e nada se afasta do raio da peça.
+#[test]
+fn y_axis_leaves_the_radial_path_alone() {
+    for forma in FORMAS {
+        let mut sem = aneis_y(forma);
+        sem.bolacha_oscilar = false;
+        let plano = generate(&sem).expect("gera");
+        let osc = generate(&aneis_y(forma)).expect("gera");
+        let centros = |l: &[String]| -> Vec<String> {
+            l.iter()
+                .filter(|s| s.starts_with("(--- ANEL"))
+                .cloned()
+                .collect()
+        };
+        assert_eq!(centros(&plano), centros(&osc), "{forma:?}: anéis iguais");
+        for m in movimentos(&osc) {
+            if let Some(x) = word(&m.linha, 'X') {
+                assert!((4.0 - 1e-3..=25.0 + 1e-3).contains(&x), "{}", m.linha);
+            }
+        }
+        let l = ring_y(&osc, 2);
+        assert!(l.len() > 10);
+    }
+}
+
+#[test]
+fn y_returns_to_zero_when_each_layer_ends() {
+    let mut p = bolacha_y(BolachaOscForma::Triangular);
+    p.num_camadas = 3;
+    let lines = generate(&p).expect("gera");
+    let mut ultimo = None;
+    let mut fins = Vec::new();
+    for l in &lines {
+        if l.starts_with("(--- CAMADA") {
+            if let Some(y) = ultimo.take() {
+                fins.push(y);
+            }
+        }
+        if (l.starts_with("G00") || l.starts_with("G01")) && !l.contains('Z') {
+            if let Some(y) = word(l, 'Y') {
+                ultimo = Some(y);
+            }
+        }
+    }
+    fins.extend(ultimo);
+    assert_eq!(fins.len(), 3, "{fins:?}");
+    assert!(fins.iter().all(|y| y.abs() < 1e-6), "{fins:?}");
+}
+
+/// A mesa segue a velocidade pedida: o F de cada linha faz o arco que a mesa
+/// percorre por minuto ser o da solda, e o Y corre junto no mesmo tempo.
+#[test]
+fn table_keeps_its_speed_while_y_moves() {
+    for forma in FORMAS {
+        for tipo in [BolachaTipo::EspiralContinua, BolachaTipo::Aneis] {
+            let mut p = bolacha_y(forma);
+            p.bolacha_tipo = tipo;
+            let lines = generate(&p).expect("gera");
+            let taxa = p.taxa();
+            let mut contadas = 0;
+            for m in movimentos(&lines) {
+                if m.da.abs() < 0.2 {
+                    continue;
+                }
+                let lido = (m.dx * m.dx + m.dy * m.dy + m.da * m.da).sqrt();
+                let tempo = lido / m.f;
+                let arco = m.x * m.da.abs().to_radians();
+                let v = arco / tempo;
+                assert!(
+                    (v - taxa).abs() / taxa < 0.03,
+                    "{forma:?} {tipo:?}: mesa a {v:.1} mm/min contra {taxa}: {}",
+                    m.linha
+                );
+                contadas += 1;
+            }
+            assert!(contadas > 20);
+        }
+    }
+}
+
+#[test]
+fn y_only_moves_use_the_oscillation_feed() {
+    let mut p = bolacha_y(BolachaOscForma::Quadrada);
+    p.velocidade_oscilacao_mm_min = 300.0;
+    let lines = generate(&p).expect("gera");
+    let so_y: Vec<Mov> = movimentos(&lines)
+        .into_iter()
+        .filter(|m| m.dy.abs() > 1e-6 && m.da.abs() < 1e-9 && m.dx.abs() < 1e-9)
+        .collect();
+    assert!(so_y.len() > 10, "a quadrada sobe e desce em Y parada");
+    assert!(so_y.iter().all(|m| (m.f - 300.0).abs() < 1e-6));
+}
+
+#[test]
+fn first_y_move_follows_the_chosen_direction() {
+    for forma in [BolachaOscForma::Triangular, BolachaOscForma::Senoidal] {
+        for (sentido, sinal) in [
+            (BolachaOscSentido::ParaFora, 1.0),
+            (BolachaOscSentido::ParaDentro, -1.0),
+        ] {
+            let mut p = bolacha_y(forma);
+            p.bolacha_osc_sentido = sentido;
+            let lines = generate(&p).expect("gera");
+            let primeiro = movimentos(&lines)
+                .into_iter()
+                .find(|m| m.dy.abs() > 1e-6)
+                .expect("primeiro movimento em Y");
+            assert!(primeiro.dy * sinal > 0.0, "{forma:?} {sentido:?}");
+        }
+    }
+}
+
+/// O ponto na peça é o `(X, Y)` da tocha girado pelo ângulo da mesa: o raio
+/// na peça passa a ser `hypot(X, Y)`.
+#[test]
+fn toolpath_places_the_torch_offset_on_the_disc() {
+    let p = aneis_y(BolachaOscForma::Triangular);
+    let lines = generate(&p).expect("gera");
+    let tp = build_toolpath(&lines, &p);
+    let maior = tp
+        .points()
+        .filter(|q| q.torch_on)
+        .map(|q| (q.pos.x.hypot(q.pos.y) - q.radius).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        maior > 0.3,
+        "o Y afasta o ponto do raio da máquina: {maior}"
+    );
+    for q in tp.points().filter(|q| q.torch_on) {
+        let (_, y) = tfm_core::toolpath::machine_xy(q);
+        assert!(
+            y.abs() <= 2.0 + 0.05,
+            "Y da máquina {y} passou de meia onda"
+        );
+    }
+}
+
+/// Com a tocha correndo junto com a mesa a velocidade relativa à peça cai, e
+/// no outro sentido sobe: é o que o aporte térmico local precisa enxergar.
+#[test]
+fn local_speed_reflects_the_torch_moving_with_the_table() {
+    let mut p = bolacha_y(BolachaOscForma::Triangular);
+    p.bolacha_tipo = BolachaTipo::Aneis;
+    p.oscilacao_comprimento = 4.0;
+    p.bolacha_osc_periodo_mm = 8.0;
+    let lines = generate(&p).expect("gera");
+    let l = local_process(&build_toolpath(&lines, &p), &p).expect("há solda");
+    let taxa = p.taxa();
+    assert!(l.speed_max > taxa * 1.5, "{l:?} contra {taxa}");
+    assert!(l.speed_min < taxa * 0.5, "{l:?} contra {taxa}");
+}
+
+#[test]
+fn y_amplitude_is_not_limited_by_the_radius_and_stalls_are_warned() {
+    let mut p = bolacha_y(BolachaOscForma::Triangular);
+    p.oscilacao_comprimento = 30.0;
+    assert!(
+        validate_physical(&p).is_valid(),
+        "em Y não há limite radial"
+    );
+    p.oscilacao_comprimento = 0.0;
+    assert!(validate_physical(&p)
+        .invalid_fields
+        .contains(&"oscilacao_comprimento"));
+
+    // 2 × comprimento ÷ período = 1: a tocha chega a parar em relação à peça.
+    let mut q = bolacha_y(BolachaOscForma::Triangular);
+    q.oscilacao_comprimento = 4.0;
+    q.bolacha_osc_periodo_mm = 8.0;
+    let (avisos, _) = QualityManager::process_warnings(&q);
+    assert!(
+        avisos.iter().any(|a| a.contains("parar ou recuar")),
+        "{avisos:?}"
+    );
+    q.oscilacao_comprimento = 1.0;
+    q.bolacha_osc_periodo_mm = 20.0;
+    let (avisos, _) = QualityManager::process_warnings(&q);
+    assert!(
+        !avisos.iter().any(|a| a.contains("parar ou recuar")),
+        "{avisos:?}"
+    );
+}
+
+#[test]
+fn estimated_time_follows_the_machine_time_with_y() {
+    for forma in FORMAS {
+        for tipo in [BolachaTipo::EspiralContinua, BolachaTipo::Aneis] {
+            let mut p = bolacha_y(forma);
+            p.bolacha_tipo = tipo;
+            let lines = generate(&p).expect("gera");
+            let min: f64 = movimentos(&lines)
+                .iter()
+                .map(|m| (m.dx * m.dx + m.dy * m.dy + m.da * m.da).sqrt() / m.f)
+                .sum();
+            let est = estimates::compute(&p, &AppConfig::default()).time_hours * 60.0;
+            assert!(
+                (est - min).abs() / min < 0.12,
+                "{forma:?} {tipo:?}: estimado {est:.2} min contra {min:.2} min da máquina"
+            );
+        }
+    }
+}
+
+#[test]
+fn the_axis_defaults_to_x_and_old_procedures_load() {
+    let p: Params = serde_json::from_str(r#"{"welding_mode": "bolacha"}"#).expect("carrega");
+    assert_eq!(p.bolacha_osc_eixo, BolachaOscEixo::X);
+    let json = serde_json::to_string(&bolacha_y(BolachaOscForma::Senoidal)).expect("grava");
+    let back: Params = serde_json::from_str(&json).expect("relê");
+    assert_eq!(back.bolacha_osc_eixo, BolachaOscEixo::Y);
 }

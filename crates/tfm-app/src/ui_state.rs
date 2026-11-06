@@ -26,7 +26,7 @@ use indexmap::IndexMap;
 use tfm_core::config::AppConfig;
 use tfm_core::gcode::multiperfil::profile_definition;
 use tfm_core::params::{
-    BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, FlatOrientation,
+    BolachaOscEixo, BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, FlatOrientation,
     MultiperfilStrategy, Operation, OscillationType, Params, ProfileShape, Rotation,
 };
 use tfm_core::validator::{py_float, validate_physical};
@@ -280,6 +280,7 @@ const PRESET_KEYS: &[&str] = &[
     "bolacha_stop_between",
     "bolacha_oscilar",
     "bolacha_osc_forma",
+    "bolacha_osc_eixo",
     "bolacha_osc_sentido",
     "bolacha_osc_periodo_mm",
     "bolacha_osc_fase_camada_perc",
@@ -327,6 +328,7 @@ fn first_entry_keys(op: Operation) -> &'static [&'static str] {
             "bolacha_stop_between",
             "bolacha_oscilar",
             "bolacha_osc_forma",
+            "bolacha_osc_eixo",
             "bolacha_osc_sentido",
             "bolacha_osc_periodo_mm",
             "bolacha_osc_fase_camada_perc",
@@ -354,6 +356,7 @@ fn reset_keys(op: Operation) -> &'static [&'static str] {
             "bolacha_stop_between",
             "bolacha_oscilar",
             "bolacha_osc_forma",
+            "bolacha_osc_eixo",
             "bolacha_osc_sentido",
             "bolacha_osc_periodo_mm",
             "bolacha_osc_fase_camada_perc",
@@ -421,6 +424,7 @@ pub struct UiState {
     pub profile_shape: ProfileShape,
     pub bolacha_tipo: BolachaTipo,
     pub bolacha_osc_forma: BolachaOscForma,
+    pub bolacha_osc_eixo: BolachaOscEixo,
     pub bolacha_osc_sentido: BolachaOscSentido,
     /// Pó escolhido no combo; vazio = o `active_powder` do config.
     pub powder_name: String,
@@ -459,6 +463,7 @@ impl UiState {
             profile_shape: p.multiperfil_profile_shape,
             bolacha_tipo: p.bolacha_tipo,
             bolacha_osc_forma: p.bolacha_osc_forma,
+            bolacha_osc_eixo: p.bolacha_osc_eixo,
             bolacha_osc_sentido: p.bolacha_osc_sentido,
             powder_name: p.powder_name.clone(),
             presets: HashMap::new(),
@@ -528,6 +533,7 @@ impl UiState {
         p.multiperfil_profile_shape = self.profile_shape;
         p.bolacha_tipo = self.bolacha_tipo;
         p.bolacha_osc_forma = self.bolacha_osc_forma;
+        p.bolacha_osc_eixo = self.bolacha_osc_eixo;
         p.bolacha_osc_sentido = self.bolacha_osc_sentido;
         p.apply_operation(self.operation);
 
@@ -642,6 +648,7 @@ impl UiState {
                 "multiperfil_profile_shape" => self.profile_shape = p.multiperfil_profile_shape,
                 "bolacha_tipo" => self.bolacha_tipo = p.bolacha_tipo,
                 "bolacha_osc_forma" => self.bolacha_osc_forma = p.bolacha_osc_forma,
+                "bolacha_osc_eixo" => self.bolacha_osc_eixo = p.bolacha_osc_eixo,
                 "bolacha_osc_sentido" => self.bolacha_osc_sentido = p.bolacha_osc_sentido,
                 other => log::debug!("UiState::write_key: chave desconhecida {other:?}"),
             }
@@ -972,10 +979,11 @@ mod tests {
     /// ficam guardados ao trocar de operação.
     #[test]
     fn bolacha_oscillation_fields_round_trip_and_reset() {
-        use tfm_core::params::{BolachaOscForma, BolachaOscSentido};
+        use tfm_core::params::{BolachaOscEixo, BolachaOscForma, BolachaOscSentido};
         let cfg = cfg();
         let mut p = Params {
             bolacha_oscilar: true,
+            bolacha_osc_eixo: BolachaOscEixo::Y,
             bolacha_osc_forma: BolachaOscForma::Senoidal,
             bolacha_osc_sentido: BolachaOscSentido::ParaDentro,
             bolacha_osc_periodo_mm: 7.5,
@@ -989,6 +997,7 @@ mod tests {
         let mut s = UiState::from_params(&p);
         let back = s.to_params(&cfg);
         assert!(back.bolacha_oscilar);
+        assert_eq!(back.bolacha_osc_eixo, BolachaOscEixo::Y);
         assert_eq!(back.bolacha_osc_forma, BolachaOscForma::Senoidal);
         assert_eq!(back.bolacha_osc_sentido, BolachaOscSentido::ParaDentro);
         assert_eq!(back.bolacha_osc_periodo_mm, 7.5);
@@ -1002,12 +1011,14 @@ mod tests {
         s.set_operation(Operation::Bolacha);
         let volta = s.to_params(&cfg);
         assert!(volta.bolacha_oscilar);
+        assert_eq!(volta.bolacha_osc_eixo, BolachaOscEixo::Y);
         assert_eq!(volta.bolacha_osc_forma, BolachaOscForma::Senoidal);
         assert_eq!(volta.bolacha_osc_periodo_mm, 7.5);
 
         s.reset_defaults();
         let d = s.to_params(&cfg);
         assert!(!d.bolacha_oscilar);
+        assert_eq!(d.bolacha_osc_eixo, BolachaOscEixo::X);
         assert_eq!(d.bolacha_osc_forma, BolachaOscForma::Triangular);
         assert_eq!(d.bolacha_osc_sentido, BolachaOscSentido::ParaFora);
         assert_eq!(d.bolacha_osc_periodo_mm, 10.0);

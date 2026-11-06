@@ -11,7 +11,7 @@ use egui::{
 use tfm_core::config::AppConfig;
 use tfm_core::deposit::LocalProcess;
 use tfm_core::params::{
-    BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, FlatOrientation,
+    BolachaOscEixo, BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, FlatOrientation,
     MultiperfilStrategy, Operation, ProfileShape, Rotation,
 };
 use tfm_core::quality::QualityManager;
@@ -91,14 +91,19 @@ mod tip {
     pub const BOLACHA_OSCILAR: &str = "O raio (X) vai e volta em torno da trajetória enquanto a \
         mesa gira. O passo entre voltas passa a usar a largura do cordão mais o comprimento da \
         oscilação, e a onda fecha dentro das bordas da peça.";
+    pub const BOLACHA_OSC_EIXO: &str =
+        "Radial (X): o raio vai e volta e a onda varre a largura do \
+        cordão; o passo entre voltas cresce. Tangencial (Y): a tocha vai e volta em Y, para frente \
+        e para trás, enquanto a mesa gira na velocidade pedida; o X segue a trajetória e o Y0 é o \
+        centro da onda. Em Y a velocidade da tocha em relação à peça sobe e desce.";
     pub const BOLACHA_OSC_COMPRIMENTO: &str =
-        "Quanto o raio varia de ponta a ponta (pico a pico). \
-        Precisa caber na largura radial da bolacha.";
+        "Quanto a tocha varia de ponta a ponta (pico a pico). \
+        No eixo X precisa caber na largura radial da bolacha; no Y não há esse limite.";
     pub const BOLACHA_OSC_FORMA: &str = "Triangular: retas com vértice nos picos. Senoidal: curva \
         suave, em vários pontos por ciclo. Quadrada: o X sobe e desce com a mesa parada, e a \
         velocidade da oscilação vale nesses movimentos.";
-    pub const BOLACHA_OSC_SENTIDO: &str = "Para onde vai o primeiro movimento: rumo ao raio \
-        externo ou rumo ao centro.";
+    pub const BOLACHA_OSC_SENTIDO: &str = "Para onde vai o primeiro movimento: no eixo X, rumo ao \
+        raio externo ou ao centro; no Y, para Y positivo ou negativo.";
     pub const BOLACHA_OSC_PERIODO: &str =
         "Quanto da trajetória um ciclo percorre, medido ao longo \
         do arco. Perto do centro o arco é curto e cabem menos ciclos por volta. Período curto com \
@@ -592,6 +597,16 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                 .copied()
                 .unwrap_or(false)
             {
+                f.combo(
+                    ui,
+                    "Eixo da oscilação:",
+                    |s| &mut s.bolacha_osc_eixo,
+                    &[
+                        (BolachaOscEixo::X, "Radial (X)"),
+                        (BolachaOscEixo::Y, "Tangencial (Y)"),
+                    ],
+                    tip::BOLACHA_OSC_EIXO,
+                );
                 f.num(
                     ui,
                     "Comprimento Osc. (mm):",
@@ -613,10 +628,17 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                     ui,
                     "Primeiro movimento:",
                     |s| &mut s.bolacha_osc_sentido,
-                    &[
-                        (BolachaOscSentido::ParaFora, "Para fora"),
-                        (BolachaOscSentido::ParaDentro, "Para dentro"),
-                    ],
+                    if f.state.bolacha_osc_eixo == BolachaOscEixo::Y {
+                        &[
+                            (BolachaOscSentido::ParaFora, "Y positivo"),
+                            (BolachaOscSentido::ParaDentro, "Y negativo"),
+                        ]
+                    } else {
+                        &[
+                            (BolachaOscSentido::ParaFora, "Para fora"),
+                            (BolachaOscSentido::ParaDentro, "Para dentro"),
+                        ]
+                    },
                     tip::BOLACHA_OSC_SENTIDO,
                 );
                 f.num(

@@ -2389,7 +2389,16 @@ fn machine_readout(pt: &PathPoint, spin: Spin) -> String {
         Spin::Table(_) => pt.radius,
         Spin::Still | Spin::Axis(_) => pt.pos.x,
     };
-    format!("Tocha X {x:.3} · Peça A {:.1}°", pt.a_deg)
+    // Na bolacha a tocha também anda em Y quando a oscilação é nesse eixo.
+    let y = match spin {
+        Spin::Table(_) => tfm_core::toolpath::machine_xy(pt).1,
+        Spin::Still | Spin::Axis(_) => 0.0,
+    };
+    if y.abs() >= 0.005 {
+        format!("Tocha X {x:.3} · Y {y:.3} · Peça A {:.1}°", pt.a_deg)
+    } else {
+        format!("Tocha X {x:.3} · Peça A {:.1}°", pt.a_deg)
+    }
 }
 
 /// Leitura da máquina no ponto atual da simulação.
