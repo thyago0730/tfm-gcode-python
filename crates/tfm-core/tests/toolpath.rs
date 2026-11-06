@@ -13,8 +13,8 @@ use std::fs;
 use serde_json::Value;
 use tfm_core::params::{Params, Rotation, WeldingMode};
 use tfm_core::toolpath::{
-    build_toolpath, count_motions, oscillation_series, step_distances, temporal_series, PathPoint,
-    Series, Toolpath, Vec3,
+    build_toolpath, count_motions, oscillation_series, plate_rpm, step_distances, temporal_series,
+    PathPoint, Series, Toolpath, Vec3,
 };
 
 const GOLDEN_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../tests/golden");
@@ -606,6 +606,93 @@ fn bolacha_seam_runs_against_the_table() {
     params.sentido_rotacao = Rotation::Antihoraria;
     let contrario = tfm_core::gcode::generate(&params).expect("gera a bolacha");
     assert!(turn_seen_from_above(&build_toolpath(&contrario, &params)) < 0.0);
+}
+
+/// A rotação da placa sai do F do G01 como o Mach3 lê: os graus de A contam
+/// como milímetros. No primeiro G01 da bolacha (X4 A0 até X4.133 A10, F1663.4)
+/// dá 1663.4 × 10 / (360 × 10.0009) rpm, também no meio da linha.
+#[test]
+fn plate_rpm_follows_the_g01_feed() {
+    let (lines, params) = golden("bolacha_espiral");
+    let tp = build_toolpath(&lines, &params);
+    let weld = &tp.segments[3];
+    let expected = 1663.4 * 10.0 / (360.0 * (0.133f32.powi(2) + 100.0).sqrt());
+    for k in [1, 2] {
+        let rpm = plate_rpm(&weld[k - 1], &weld[k], params.welding_mode);
+        assert_close(
+            rpm.expect("G01 tem rpm"),
+            expected,
+            1e-3,
+            "rpm do primeiro G01",
+        );
+    }
+    // G0 vai na velocidade da máquina: não há rpm a mostrar.
+    assert_eq!(
+        plate_rpm(&tp.segments[2][0], &weld[0], params.welding_mode),
+        None
+    );
+    // Sem girar A, a placa está parada.
+    let parado = PathPoint {
+        a_deg: weld[1].a_deg,
+        ..weld[2]
+    };
+    assert_eq!(plate_rpm(&weld[1], &parado, params.welding_mode), Some(0.0));
+}
+
+/// Rotação ao vivo de cada trecho com a tocha ligada.
+fn live_rpm(p: &Params) -> Vec<f32> {
+    let lines = tfm_core::gcode::generate(p).expect("gera o programa");
+    let tp = build_toolpath(&lines, p);
+    let pts: Vec<&PathPoint> = tp.points().collect();
+    pts.windows(2)
+        .filter(|w| w[1].torch_on)
+        .filter_map(|w| plate_rpm(w[0], w[1], p.welding_mode))
+        .filter(|r| *r > 0.0)
+        .collect()
+}
+
+/// Minutos por volta do painel "Rotação (min/volta)", que vem de outra conta:
+/// comprimento da volta ÷ velocidade.
+fn painel_min_por_volta(p: &Params) -> Vec<f32> {
+    let est = tfm_core::estimates::compute(p, &tfm_core::config::AppConfig::default());
+    est.rotation
+        .text
+        .split(" - ")
+        .map(|v| v.trim().parse().expect("número"))
+        .collect()
+}
+
+/// A rotação ao vivo bate com o painel: na espiral é uma só, na bolacha vai da
+/// volta de fora (mais lenta) à de dentro (mais rápida).
+#[test]
+fn plate_rpm_matches_the_rotation_panel() {
+    let espiral = Params {
+        compensar_rotacao: false,
+        ..Params::default()
+    };
+    let painel = painel_min_por_volta(&espiral);
+    let ao_vivo = live_rpm(&espiral);
+    let meio = ao_vivo[ao_vivo.len() / 2];
+    assert_close(meio, 1.0 / painel[0], 0.02 / painel[0], "espiral");
+
+    let mut bolacha = Params::default();
+    bolacha.apply_operation(tfm_core::params::Operation::Bolacha);
+    let painel = painel_min_por_volta(&bolacha);
+    let ao_vivo = live_rpm(&bolacha);
+    let min = ao_vivo.iter().copied().fold(f32::MAX, f32::min);
+    let max = ao_vivo.iter().copied().fold(f32::MIN, f32::max);
+    assert_close(
+        min,
+        1.0 / painel[0],
+        0.03 / painel[0],
+        "bolacha, volta de fora",
+    );
+    assert_close(
+        max,
+        1.0 / painel[1],
+        0.05 / painel[1],
+        "bolacha, volta de dentro",
+    );
 }
 
 #[test]

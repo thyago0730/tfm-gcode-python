@@ -286,6 +286,27 @@ fn on_table(height: f64, radius: f64, a_deg: f64) -> Vec3 {
     vec3(radius * rad.cos(), radius * rad.sin(), height)
 }
 
+/// Rotação da placa (voltas por minuto do eixo A) no movimento de `a` até `b`,
+/// pelo `F` do `G01`, como o Mach3 lê uma linha que mistura eixos: os graus de A
+/// contam como milímetros na distância, junto com o X e o Z da máquina (na
+/// bolacha o X é o raio). `None` em `G0`, que vai na velocidade da máquina, ou
+/// sem `F`; zero quando A não gira.
+pub fn plate_rpm(a: &PathPoint, b: &PathPoint, mode: WeldingMode) -> Option<f32> {
+    if b.rapid || b.feed <= 0.0 || !b.feed.is_finite() {
+        return None;
+    }
+    let da = b.a_deg - a.a_deg;
+    let (dx, dz) = match mode {
+        WeldingMode::Bolacha => (b.radius - a.radius, b.pos.z - a.pos.z),
+        _ => (b.pos.x - a.pos.x, b.radius - a.radius),
+    };
+    let dist = (dx * dx + dz * dz + da * da).sqrt();
+    if da == 0.0 || dist <= 0.0 {
+        return Some(0.0);
+    }
+    Some(b.feed * da.abs() / (360.0 * dist))
+}
+
 /// `float(texto)` do Python dentro de `try/except: pass`: `None` em vez de erro.
 fn parse_number(text: &str) -> Option<f64> {
     text.parse().ok()

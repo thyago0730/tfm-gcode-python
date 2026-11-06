@@ -38,7 +38,7 @@ use egui::{
 use tfm_core::deposit::{DepositModel, HeightMap};
 use tfm_core::gcode::common::overlap_metrics;
 use tfm_core::params::{Direction, FlatOrientation, Operation, Params, WeldingMode};
-use tfm_core::toolpath::{PathPoint, Toolpath, Vec3};
+use tfm_core::toolpath::{plate_rpm, PathPoint, Toolpath, Vec3};
 
 use crate::app::TfmApp;
 use crate::theme::Palette;
@@ -1665,7 +1665,8 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
     // No cilindro e na bolacha quem gira é a peça: o ponto que está sendo
     // depositado fica sempre sob a tocha fixa. Fora da simulação o "atual" é o
     // último ponto, então a peça aparece como termina.
-    let current = toolpath.and_then(|tp| current_point(tp, draw_limit(&state.sim, total)));
+    let limit = draw_limit(&state.sim, total);
+    let current = toolpath.and_then(|tp| current_point(tp, limit));
     let spin = result.map_or(Spin::Still, |r| Spin::of(&r.params, current));
     let rotation = current.map_or(0.0, |pt| pt.a_deg);
 
@@ -1733,9 +1734,19 @@ fn view_ui(app: &TfmApp, ui: &mut Ui, state: &mut ViewState) -> Option<usize> {
             None
         }
     };
+    // A placa gira no trecho que chega ao ponto atual, vindo do anterior.
+    let previous = toolpath.and_then(|tp| current_point(tp, limit.saturating_sub(1)));
+    let max_rpm = app.cfg.active_limits().max_rpm_chuck;
     let readout = current
         .filter(|_| state.sim.active() && spin != Spin::Still)
-        .map(|pt| machine_readout(pt, spin));
+        .zip(result)
+        .map(|(pt, r)| {
+            let rpm = previous.and_then(|a| plate_rpm(a, pt, r.params.welding_mode));
+            Readout {
+                machine: machine_readout(pt, spin),
+                plate: plate_readout(rpm, max_rpm),
+            }
+        });
     overlay(&painter, rect, toolpath, readout, deposit, &palette);
     view_cube(ui, &painter, state, rect, &palette);
     let bar = (total > 0).then(|| {
@@ -2381,15 +2392,37 @@ fn machine_readout(pt: &PathPoint, spin: Spin) -> String {
     format!("Tocha X {x:.3} · Peça A {:.1}°", pt.a_deg)
 }
 
+/// Leitura da máquina no ponto atual da simulação.
+struct Readout {
+    /// X da tocha e ângulo A da peça.
+    machine: String,
+    /// Rotação da placa e se ela passou do limite da placa.
+    plate: (String, bool),
+}
+
+/// Rotação da placa na leitura da simulação, em rpm e em min/volta, a unidade
+/// do painel de resultados. O `bool` avisa quando passa de `max_rpm`, o limite
+/// da placa do perfil da máquina, o mesmo que pinta "Rotação" no painel.
+fn plate_readout(rpm: Option<f32>, max_rpm: f64) -> (String, bool) {
+    match rpm {
+        None => ("Placa em G0".to_owned(), false),
+        Some(r) if r <= 0.0 || !r.is_finite() => ("Placa parada".to_owned(), false),
+        Some(r) => (
+            format!("Placa {r:.2} rpm · {:.3} min/volta", 1.0 / r),
+            f64::from(r) > max_rpm,
+        ),
+    }
+}
+
 /// Textos sobre o viewport: resumo e, durante a simulação, a leitura da
-/// máquina (acima, à esquerda: X da tocha e ângulo A da peça), aviso de
-/// decimação (abaixo, à direita). O canto superior direito é do cubo de
-/// orientação, e a faixa de baixo, da linha do tempo.
+/// máquina (acima, à esquerda: X da tocha, ângulo A da peça e rotação da
+/// placa), aviso de decimação (abaixo, à direita). O canto superior direito é
+/// do cubo de orientação, e a faixa de baixo, da linha do tempo.
 fn overlay(
     painter: &Painter,
     rect: Rect,
     toolpath: Option<&Toolpath>,
-    readout: Option<String>,
+    readout: Option<Readout>,
     deposit: Option<&DepositModel>,
     palette: &Palette,
 ) {
@@ -2398,13 +2431,18 @@ fn overlay(
     if let Some(m) = deposit {
         deposit_legend(painter, rect, m, palette);
     }
-    if let Some(text) = readout {
+    if let Some(r) = readout {
+        let at = rect.left_top() + vec2(pad.x, pad.y + 16.0);
+        painter.text(at, Align2::LEFT_TOP, r.machine, font.clone(), palette.text);
+        // A placa em destaque, para acompanhar ao vivo; vermelha acima do limite.
+        let (plate, over) = r.plate;
+        let color = if over { palette.danger } else { palette.accent };
         painter.text(
-            rect.left_top() + vec2(pad.x, pad.y + 16.0),
+            at + vec2(0.0, 16.0),
             Align2::LEFT_TOP,
-            text,
-            font.clone(),
-            palette.text,
+            plate,
+            FontId::monospace(14.0),
+            color,
         );
     }
     if let Some(tp) = toolpath {
@@ -3887,6 +3925,67 @@ mod tests {
         assert!(text.contains(&x), "{text} deveria conter {x}");
     }
 
+    /// A leitura da placa mostra rpm e min/volta, como o painel de resultados, e
+    /// avisa quando passa do limite da placa do perfil da máquina.
+    #[test]
+    fn plate_readout_shows_rpm_and_minutes_per_turn() {
+        let (text, over) = plate_readout(Some(0.764), 100.0);
+        assert_eq!(text, "Placa 0.76 rpm · 1.309 min/volta");
+        assert!(!over);
+        assert_eq!(plate_readout(Some(0.0), 100.0).0, "Placa parada");
+        assert_eq!(plate_readout(None, 100.0).0, "Placa em G0");
+        assert!(plate_readout(Some(4.8), 4.0).1, "acima do limite da placa");
+    }
+
+    /// Textos da aba inteira no meio da simulação da operação `op`.
+    fn simulation_texts(op: Operation) -> Vec<String> {
+        let dir = tempfile::tempdir().unwrap_or_else(|e| panic!("{e}"));
+        let mut app = TfmApp::headless(dir.path());
+        let mut params = Params::default();
+        params.apply_operation(op);
+        app.result = Some(crate::compute::compute_all(params, &app.cfg, 1));
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1200.0, 800.0))),
+            ..Default::default()
+        };
+        let mut state = ViewState::default();
+        // O primeiro quadro registra o resultado (e para a simulação).
+        ctx.run_ui(raw.clone(), |ui| {
+            view_ui(&app, ui, &mut state);
+        })
+        .textures_delta
+        .clear();
+        state.sim.play();
+        state.sim.progress = 0.5;
+        let mut output = ctx.run_ui(raw, |ui| {
+            view_ui(&app, ui, &mut state);
+        });
+        output.textures_delta.clear();
+        let (mut circles, mut texts) = (Vec::new(), Vec::new());
+        for clipped in &output.shapes {
+            collect_shapes(&clipped.shape, &mut circles, &mut texts);
+        }
+        texts
+    }
+
+    /// Na simulação das peças que giram a rotação da placa aparece ao vivo; na
+    /// chapa, que não gira, não.
+    #[test]
+    fn view_tab_shows_the_plate_rpm_while_simulating() {
+        for op in [Operation::Bolacha, Operation::Espiral] {
+            let texts = simulation_texts(op);
+            assert!(
+                texts
+                    .iter()
+                    .any(|t| t.starts_with("Placa ") && t.contains(" rpm")),
+                "{op:?} sem rpm da placa: {texts:?}"
+            );
+        }
+        let chapa = simulation_texts(Operation::ChapaPlana);
+        assert!(!chapa.iter().any(|t| t.starts_with("Placa ")), "{chapa:?}");
+    }
+
     /// Com a simulação andando só existe um marcador: a tocha. A marca da linha
     /// selecionada gira presa à peça e pareceria uma segunda tocha, então ela
     /// só volta na pausa.
@@ -4106,7 +4205,10 @@ mod tests {
             draw_path(
                 &painter, &proj, &tp, &mut state, &palette, None, None, 5.0, spin, None, false,
             );
-            let readout = machine_readout(&cur, spin);
+            let readout = Readout {
+                machine: machine_readout(&cur, spin),
+                plate: plate_readout(Some(1.0), 100.0),
+            };
             overlay(&painter, rect, Some(&tp), Some(readout), None, &palette);
         });
         output.textures_delta.clear();
