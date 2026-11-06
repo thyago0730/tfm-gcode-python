@@ -26,8 +26,8 @@ use indexmap::IndexMap;
 use tfm_core::config::AppConfig;
 use tfm_core::gcode::multiperfil::profile_definition;
 use tfm_core::params::{
-    BolachaTipo, Direction, FlatOrientation, MultiperfilStrategy, Operation, OscillationType,
-    Params, ProfileShape, Rotation,
+    BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, FlatOrientation,
+    MultiperfilStrategy, Operation, OscillationType, Params, ProfileShape, Rotation,
 };
 use tfm_core::validator::{py_float, validate_physical};
 
@@ -210,6 +210,10 @@ const NUM_FIELDS: &[NumField] = &[
         multiperfil_end_chamfer_angle_deg
     ),
     num!("oscilacao_comprimento", oscilacao_comprimento),
+    num!("bolacha_osc_periodo_mm", bolacha_osc_periodo_mm),
+    num!("bolacha_osc_fase_camada_perc", bolacha_osc_fase_camada_perc),
+    num!("bolacha_osc_espera_s", bolacha_osc_espera_s),
+    num!("bolacha_osc_pontos_ciclo", bolacha_osc_pontos_ciclo),
     num!("deslocamento_angular_perc", deslocamento_angular_perc),
     num!("osc_test_gran_x", osc_test_gran_x),
     num!("osc_test_gran_a", osc_test_gran_a),
@@ -249,6 +253,7 @@ const FLAG_FIELDS: &[FlagField] = &[
         multiperfil_end_chamfer_enabled
     ),
     flag!("bolacha_stop_between", bolacha_stop_between),
+    flag!("bolacha_oscilar", bolacha_oscilar),
     flag!("smart_layers", smart_layers),
 ];
 
@@ -273,6 +278,13 @@ const PRESET_KEYS: &[&str] = &[
     "internal_face_clearance_x",
     "bolacha_tipo",
     "bolacha_stop_between",
+    "bolacha_oscilar",
+    "bolacha_osc_forma",
+    "bolacha_osc_sentido",
+    "bolacha_osc_periodo_mm",
+    "bolacha_osc_fase_camada_perc",
+    "bolacha_osc_espera_s",
+    "bolacha_osc_pontos_ciclo",
     "overlap_angular_deg",
     "bead_width_calibration_factor",
     "osc_test_gran_x",
@@ -309,7 +321,19 @@ const MULTIPERFIL_KEYS: &[&str] = &[
 /// (ramo `else` de `_set_revestimento_mode`).
 fn first_entry_keys(op: Operation) -> &'static [&'static str] {
     match op {
-        Operation::Bolacha => &["diametro_interno", "bolacha_tipo", "bolacha_stop_between"],
+        Operation::Bolacha => &[
+            "diametro_interno",
+            "bolacha_tipo",
+            "bolacha_stop_between",
+            "bolacha_oscilar",
+            "bolacha_osc_forma",
+            "bolacha_osc_sentido",
+            "bolacha_osc_periodo_mm",
+            "bolacha_osc_fase_camada_perc",
+            "bolacha_osc_espera_s",
+            "bolacha_osc_pontos_ciclo",
+            "oscilacao_comprimento",
+        ],
         Operation::ChapaPlana => &[
             "largura_revestir",
             "flat_orientation",
@@ -328,6 +352,14 @@ fn reset_keys(op: Operation) -> &'static [&'static str] {
             "diametro_interno",
             "bolacha_tipo",
             "bolacha_stop_between",
+            "bolacha_oscilar",
+            "bolacha_osc_forma",
+            "bolacha_osc_sentido",
+            "bolacha_osc_periodo_mm",
+            "bolacha_osc_fase_camada_perc",
+            "bolacha_osc_espera_s",
+            "bolacha_osc_pontos_ciclo",
+            "oscilacao_comprimento",
             "overlap_angular_deg",
         ],
         Operation::ChapaPlana => &[
@@ -388,6 +420,8 @@ pub struct UiState {
     pub multiperfil_strategy: MultiperfilStrategy,
     pub profile_shape: ProfileShape,
     pub bolacha_tipo: BolachaTipo,
+    pub bolacha_osc_forma: BolachaOscForma,
+    pub bolacha_osc_sentido: BolachaOscSentido,
     /// Pó escolhido no combo; vazio = o `active_powder` do config.
     pub powder_name: String,
     /// Último estado de cada operação já visitada (`mode_presets` do Python).
@@ -424,6 +458,8 @@ impl UiState {
             multiperfil_strategy: p.multiperfil_strategy,
             profile_shape: p.multiperfil_profile_shape,
             bolacha_tipo: p.bolacha_tipo,
+            bolacha_osc_forma: p.bolacha_osc_forma,
+            bolacha_osc_sentido: p.bolacha_osc_sentido,
             powder_name: p.powder_name.clone(),
             presets: HashMap::new(),
             invalid: HashSet::new(),
@@ -491,6 +527,8 @@ impl UiState {
         p.multiperfil_strategy = self.multiperfil_strategy;
         p.multiperfil_profile_shape = self.profile_shape;
         p.bolacha_tipo = self.bolacha_tipo;
+        p.bolacha_osc_forma = self.bolacha_osc_forma;
+        p.bolacha_osc_sentido = self.bolacha_osc_sentido;
         p.apply_operation(self.operation);
 
         // Leads só com "Usar início e fim extra" (como `_get_current_params`).
@@ -603,6 +641,8 @@ impl UiState {
                 "multiperfil_strategy" => self.multiperfil_strategy = p.multiperfil_strategy,
                 "multiperfil_profile_shape" => self.profile_shape = p.multiperfil_profile_shape,
                 "bolacha_tipo" => self.bolacha_tipo = p.bolacha_tipo,
+                "bolacha_osc_forma" => self.bolacha_osc_forma = p.bolacha_osc_forma,
+                "bolacha_osc_sentido" => self.bolacha_osc_sentido = p.bolacha_osc_sentido,
                 other => log::debug!("UiState::write_key: chave desconhecida {other:?}"),
             }
         }
@@ -926,6 +966,52 @@ mod tests {
 
         s.powder_name.clear();
         assert_eq!(s.to_params(&cfg).powder_name, cfg.active_powder);
+    }
+
+    /// Os campos da oscilação da bolacha fazem a volta, voltam ao padrão e
+    /// ficam guardados ao trocar de operação.
+    #[test]
+    fn bolacha_oscillation_fields_round_trip_and_reset() {
+        use tfm_core::params::{BolachaOscForma, BolachaOscSentido};
+        let cfg = cfg();
+        let mut p = Params {
+            bolacha_oscilar: true,
+            bolacha_osc_forma: BolachaOscForma::Senoidal,
+            bolacha_osc_sentido: BolachaOscSentido::ParaDentro,
+            bolacha_osc_periodo_mm: 7.5,
+            bolacha_osc_fase_camada_perc: 20.0,
+            bolacha_osc_espera_s: 0.3,
+            bolacha_osc_pontos_ciclo: 16.0,
+            oscilacao_comprimento: 3.0,
+            ..Params::default()
+        };
+        p.apply_operation(Operation::Bolacha);
+        let mut s = UiState::from_params(&p);
+        let back = s.to_params(&cfg);
+        assert!(back.bolacha_oscilar);
+        assert_eq!(back.bolacha_osc_forma, BolachaOscForma::Senoidal);
+        assert_eq!(back.bolacha_osc_sentido, BolachaOscSentido::ParaDentro);
+        assert_eq!(back.bolacha_osc_periodo_mm, 7.5);
+        assert_eq!(back.bolacha_osc_fase_camada_perc, 20.0);
+        assert_eq!(back.bolacha_osc_espera_s, 0.3);
+        assert_eq!(back.bolacha_osc_pontos_ciclo, 16.0);
+        assert_eq!(back.oscilacao_comprimento, 3.0);
+
+        // Trocar de operação e voltar mantém a configuração da bolacha.
+        s.set_operation(Operation::Espiral);
+        s.set_operation(Operation::Bolacha);
+        let volta = s.to_params(&cfg);
+        assert!(volta.bolacha_oscilar);
+        assert_eq!(volta.bolacha_osc_forma, BolachaOscForma::Senoidal);
+        assert_eq!(volta.bolacha_osc_periodo_mm, 7.5);
+
+        s.reset_defaults();
+        let d = s.to_params(&cfg);
+        assert!(!d.bolacha_oscilar);
+        assert_eq!(d.bolacha_osc_forma, BolachaOscForma::Triangular);
+        assert_eq!(d.bolacha_osc_sentido, BolachaOscSentido::ParaFora);
+        assert_eq!(d.bolacha_osc_periodo_mm, 10.0);
+        assert_eq!(d.bolacha_osc_pontos_ciclo, 12.0);
     }
 
     /// Enums e textos livres fazem a volta.

@@ -28,6 +28,7 @@ Visão geral, build, testes e fixtures golden estão no [`README.md`](../README.
 | `gcode/spiral.rs` | Modo Espiral (hélice X+A por camada, externo ou interno); com `fechamento_uniforme`, material de borda a borda, voltas inteiras e anéis nas pontas (`overlap::uniform_closing`); com `compensar_rotacao`, `F` por trecho (`deposit::solve_feed_factors`). |
 | `gcode/multiperfil.rs` | Modo Espiral Multiperfil (vários perfis por setor, formas retangular/trapezoidal/triangular, estratégias). |
 | `gcode/bolacha.rs` | Modo Bolacha (face circular: anéis ou espiral, com paradas). |
+| `gcode/bolacha_osc.rs` | Oscilação radial da Bolacha: onda triangular, senoidal ou quadrada, período em mm, fase entre camadas, esperas. |
 | `gcode/flat_plate.rs` | Modo Chapa Plana (cordões retos em X ou Y, zigue-zague ou unidirecional, lead-in/out). |
 | `gcode/oscillation.rs` | Oscilação linear, quadrada e quadrada contínua, mais os modos legados. |
 | `validator.rs` | Regras físicas dos parâmetros (mensagens da UI) e invariantes do G-code gerado. |

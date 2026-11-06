@@ -56,6 +56,9 @@ fn angular_feed(taxa_de_deposicao: f64, x_pos: f64) -> f64 {
 
 /// `_build_bolacha_segment`: uma camada da bolacha.
 fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
+    if p.bolacha_oscilar {
+        return super::bolacha_osc::build_segment(p, layer_num);
+    }
     let afastamento = p.afastamento_tocha;
     let z_safe_offset = p.afastamento_seguranca;
     let z_layer = (layer_num as f64 * p.espessura_camada) + afastamento;

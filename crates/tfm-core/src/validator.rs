@@ -152,6 +152,11 @@ pub fn validate_physical(p: &Params) -> FieldErrors {
         );
     }
 
+    // Oscilação da bolacha: o envelope da onda precisa caber no raio da peça.
+    if p.welding_mode == WeldingMode::Bolacha && p.bolacha_oscilar {
+        bolacha_oscilation_rules(p, &mut fe);
+    }
+
     // 4. Granularidade X da quadrada contínua.
     if Operation::from_params(p) == Operation::OscilacaoQuadradaContinua && p.osc_test_gran_x <= 0.0
     {
@@ -184,6 +189,49 @@ pub fn validate_physical(p: &Params) -> FieldErrors {
         }
     }
     fe
+}
+
+/// Regras da oscilação da bolacha, só com ela ligada.
+fn bolacha_oscilation_rules(p: &Params, fe: &mut FieldErrors) {
+    use crate::gcode::bolacha_osc::{MIN_PERIODO_MM, MIN_PONTOS_CICLO};
+    use crate::params::BolachaOscForma;
+    let r_ext = p.diametro / 2.0;
+    let r_int = (p.diametro_interno / 2.0).max(p.largura_cordao / 2.0);
+    if p.oscilacao_comprimento <= 0.0 {
+        fe.fail(
+            "Comprimento de oscilação deve ser maior que zero.",
+            &["oscilacao_comprimento"],
+        );
+    } else if p.oscilacao_comprimento >= r_ext - r_int {
+        fe.fail(
+            format!(
+                "Comprimento de oscilação ({}mm) não cabe na largura radial da bolacha ({}mm).",
+                py_float(p.oscilacao_comprimento),
+                py_float((r_ext - r_int).max(0.0))
+            ),
+            &["oscilacao_comprimento", "diametro", "diametro_interno"],
+        );
+    }
+    if p.bolacha_osc_periodo_mm < MIN_PERIODO_MM {
+        fe.fail(
+            format!("Período da oscilação deve ser de pelo menos {MIN_PERIODO_MM} mm."),
+            &["bolacha_osc_periodo_mm"],
+        );
+    }
+    if p.bolacha_osc_forma == BolachaOscForma::Senoidal
+        && p.bolacha_osc_pontos_ciclo.round() < MIN_PONTOS_CICLO
+    {
+        fe.fail(
+            format!("A senoide precisa de pelo menos {MIN_PONTOS_CICLO} pontos por ciclo."),
+            &["bolacha_osc_pontos_ciclo"],
+        );
+    }
+    if p.bolacha_osc_espera_s < 0.0 {
+        fe.fail(
+            "A espera na ponta não pode ser negativa.",
+            &["bolacha_osc_espera_s"],
+        );
+    }
 }
 
 /// `true` quando [`validate_physical`] não encontra erro: os parâmetros podem

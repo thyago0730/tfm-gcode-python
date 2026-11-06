@@ -34,6 +34,7 @@ use indexmap::IndexMap;
 use crate::config::{AppConfig, MachineLimits};
 use crate::deposit::MAX_FEED_FACTOR;
 use crate::formula::{evaluate_block, formula_locals};
+use crate::gcode::bolacha_osc;
 use crate::gcode::common::{
     effective_base_diameter, overlap_metrics, profile_shape_str, py_max, py_min, py_or,
     rotary_arc_bounds,
@@ -826,21 +827,32 @@ fn oscilacao(p: &Params, s: &Shared) -> ModeOutcome {
 /// interno quando difere, o RPM máximo (raio interno) valida o limite e o
 /// curso em X é o raio externo.
 fn bolacha(p: &Params, s: &Shared) -> ModeOutcome {
-    let passo = py_max(overlap_metrics(p, 0, None, None).step_over_mm, 1e-6);
+    let mut passo = py_max(overlap_metrics(p, 0, None, None).step_over_mm, 1e-6);
     let r_ext = p.diametro / 2.0;
     let r_int = py_max(p.diametro_interno / 2.0, s.larg_cordao / 2.0);
-    let radial_width = py_max(0.0, r_ext - r_int);
-    let num_voltas = if radial_width > 0.0 {
-        (radial_width / passo).ceil()
-    } else {
-        1.0
+    let mut radial_width = py_max(0.0, r_ext - r_int);
+    // Com oscilação, o centro do cordão anda numa faixa menor e o passo usa a
+    // largura varrida (ver `gcode::bolacha_osc`).
+    let osc = p.bolacha_oscilar.then(|| bolacha_osc::faixa(p));
+    let (r_centro_int, r_centro_ext) = match &osc {
+        Some(f) => {
+            passo = f.passo;
+            radial_width = f.c_ext - f.c_int;
+            (f.c_int, f.c_ext)
+        }
+        None => (r_int, r_ext),
+    };
+    let num_voltas = match &osc {
+        Some(f) => f.num_voltas as f64,
+        None if radial_width > 0.0 => (radial_width / passo).ceil(),
+        None => 1.0,
     };
     let overlap_ang = p.overlap_angular_deg;
     let (comprimento_total_mov, total_rotacoes, total_angulo) = match p.bolacha_tipo {
         BolachaTipo::Aneis => {
             let num_voltas_total = num_voltas + 1.0;
             let fator_volta = (360.0 + overlap_ang) / 360.0;
-            let soma_raios = (num_voltas_total * r_int)
+            let soma_raios = (num_voltas_total * r_centro_int)
                 + (passo * (num_voltas_total - 1.0) * num_voltas_total / 2.0);
             (
                 2.0 * PI * soma_raios * fator_volta,
@@ -852,13 +864,21 @@ fn bolacha(p: &Params, s: &Shared) -> ModeOutcome {
             let total_rotacoes = num_voltas + (overlap_ang / 360.0);
             let total_angulo = (num_voltas * 360.0) + overlap_ang;
             (
-                2.0 * PI * ((r_int + r_ext) / 2.0) * total_rotacoes,
+                2.0 * PI * ((r_centro_int + r_centro_ext) / 2.0) * total_rotacoes,
                 total_rotacoes,
                 total_angulo,
             )
         }
     };
-    let tempo_min_total = comprimento_total_mov / py_max(s.taxa, 1e-6);
+    // A onda alonga o caminho e a espera nas pontas soma tempo.
+    let (fator_onda, espera_s_por_mm) = if osc.is_some() {
+        bolacha_osc::weave_cost(p)
+    } else {
+        (1.0, 0.0)
+    };
+    let comprimento_total_mov = comprimento_total_mov * fator_onda;
+    let tempo_min_total = comprimento_total_mov / py_max(s.taxa, 1e-6)
+        + comprimento_total_mov / fator_onda * espera_s_por_mm / 60.0;
     let area_camada = PI * (r_ext.powi(2) - r_int.powi(2));
     let area_total = area_camada * s.num_camadas;
     let consumo_po_g = area_total * s.peso;

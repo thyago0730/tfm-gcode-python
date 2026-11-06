@@ -485,6 +485,48 @@ mod tests {
             .is_none());
     }
 
+    /// A bolacha oscilando gera, valida e desenha em todas as formas e tipos; um
+    /// comprimento que não cabe na peça vira erro de campo, não pânico.
+    #[test]
+    fn disc_oscillation_computes_end_to_end() {
+        use tfm_core::params::{BolachaOscForma, BolachaTipo, Operation};
+        let cfg = AppConfig::default();
+        for forma in [
+            BolachaOscForma::Triangular,
+            BolachaOscForma::Senoidal,
+            BolachaOscForma::Quadrada,
+        ] {
+            for tipo in [BolachaTipo::EspiralContinua, BolachaTipo::Aneis] {
+                let mut p = Params::default();
+                p.apply_operation(Operation::Bolacha);
+                p.bolacha_oscilar = true;
+                p.bolacha_osc_forma = forma;
+                p.bolacha_tipo = tipo;
+                p.oscilacao_comprimento = 4.0;
+                let r = compute_all(p, &cfg, 1);
+                assert!(r.is_ok(), "{forma:?} {tipo:?}: {:?}", r.gen_error);
+                assert!(r.invariants.is_empty(), "{:?}", r.invariants);
+                assert!(
+                    r.toolpath.point_count() > 100,
+                    "{}",
+                    r.toolpath.point_count()
+                );
+                assert!(r.local.is_some());
+                assert!(r.estimates.time_hours > 0.0);
+            }
+        }
+        let mut grande = Params::default();
+        grande.apply_operation(Operation::Bolacha);
+        grande.bolacha_oscilar = true;
+        grande.oscilacao_comprimento = 40.0;
+        let r = compute_all(grande, &cfg, 2);
+        assert!(!r.is_ok());
+        assert!(r
+            .field_errors
+            .invalid_fields
+            .contains(&"oscilacao_comprimento"));
+    }
+
     /// Faz `poll()` até chegar um resultado ou estourar `timeout`.
     fn wait_result(handle: &mut ComputeHandle, timeout: Duration) -> Option<ComputeResult> {
         let deadline = Instant::now() + timeout;

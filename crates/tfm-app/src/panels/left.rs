@@ -11,7 +11,8 @@ use egui::{
 use tfm_core::config::AppConfig;
 use tfm_core::deposit::LocalProcess;
 use tfm_core::params::{
-    BolachaTipo, Direction, FlatOrientation, MultiperfilStrategy, Operation, ProfileShape, Rotation,
+    BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, FlatOrientation,
+    MultiperfilStrategy, Operation, ProfileShape, Rotation,
 };
 use tfm_core::quality::QualityManager;
 
@@ -87,6 +88,26 @@ mod tip {
         junto com o fechamento uniforme, desacelera nas pontas, onde falta material, gastando mais \
         pó e tempo. A rotação muda até 2,5 vezes: confira se ela continua dentro da EPS.";
     pub const DEFASAR_CAMADAS: &str = "Cada camada parte em um ângulo diferente (360° ÷ nº de         camadas), o que desloca os passes em X sem mudar o passo nem o X do programa. Os cumes de         uma camada caem nos vales da anterior, e o relevo entre passes não soma. Com uma camada         não muda nada.";
+    pub const BOLACHA_OSCILAR: &str = "O raio (X) vai e volta em torno da trajetória enquanto a \
+        mesa gira. O passo entre voltas passa a usar a largura do cordão mais o comprimento da \
+        oscilação, e a onda fecha dentro das bordas da peça.";
+    pub const BOLACHA_OSC_COMPRIMENTO: &str =
+        "Quanto o raio varia de ponta a ponta (pico a pico). \
+        Precisa caber na largura radial da bolacha.";
+    pub const BOLACHA_OSC_FORMA: &str = "Triangular: retas com vértice nos picos. Senoidal: curva \
+        suave, em vários pontos por ciclo. Quadrada: o X sobe e desce com a mesa parada, e a \
+        velocidade da oscilação vale nesses movimentos.";
+    pub const BOLACHA_OSC_SENTIDO: &str = "Para onde vai o primeiro movimento: rumo ao raio \
+        externo ou rumo ao centro.";
+    pub const BOLACHA_OSC_PERIODO: &str =
+        "Quanto da trajetória um ciclo percorre, medido ao longo \
+        do arco. Perto do centro o arco é curto e cabem menos ciclos por volta. Período curto com \
+        velocidade alta gera um aviso de frequência.";
+    pub const BOLACHA_OSC_FASE: &str = "Quanto a onda avança de uma camada para a seguinte, em % \
+        do ciclo, para os picos não empilharem. Zero repete a mesma fase.";
+    pub const BOLACHA_OSC_ESPERA: &str = "Pausa em cada pico, com a tocha ligada. Zero não espera.";
+    pub const BOLACHA_OSC_PONTOS: &str = "Pontos por ciclo da senoide. Mais pontos, curva mais \
+        fiel e mais linhas no programa. Mínimo 6.";
     pub const FECHAR_PONTAS: &str =
         "Dá uma volta completa parada no início e no fim para fechar o cordão.";
     pub const RECUAR: &str = "Vai ao Z e Y zero máquina (G53) antes de ligar a tocha.";
@@ -564,6 +585,67 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                 "bolacha_stop_between",
                 tip::PARAR_ANEIS,
             );
+            f.flag(ui, "Oscilar", "bolacha_oscilar", tip::BOLACHA_OSCILAR);
+            if f.state
+                .flags
+                .get("bolacha_oscilar")
+                .copied()
+                .unwrap_or(false)
+            {
+                f.num(
+                    ui,
+                    "Comprimento Osc. (mm):",
+                    "oscilacao_comprimento",
+                    tip::BOLACHA_OSC_COMPRIMENTO,
+                );
+                f.combo(
+                    ui,
+                    "Forma da onda:",
+                    |s| &mut s.bolacha_osc_forma,
+                    &[
+                        (BolachaOscForma::Triangular, "Triangular"),
+                        (BolachaOscForma::Senoidal, "Senoidal"),
+                        (BolachaOscForma::Quadrada, "Quadrada"),
+                    ],
+                    tip::BOLACHA_OSC_FORMA,
+                );
+                f.combo(
+                    ui,
+                    "Primeiro movimento:",
+                    |s| &mut s.bolacha_osc_sentido,
+                    &[
+                        (BolachaOscSentido::ParaFora, "Para fora"),
+                        (BolachaOscSentido::ParaDentro, "Para dentro"),
+                    ],
+                    tip::BOLACHA_OSC_SENTIDO,
+                );
+                f.num(
+                    ui,
+                    "Período (mm):",
+                    "bolacha_osc_periodo_mm",
+                    tip::BOLACHA_OSC_PERIODO,
+                );
+                f.num(
+                    ui,
+                    "Fase entre camadas (%):",
+                    "bolacha_osc_fase_camada_perc",
+                    tip::BOLACHA_OSC_FASE,
+                );
+                f.num(
+                    ui,
+                    "Espera nas pontas (s):",
+                    "bolacha_osc_espera_s",
+                    tip::BOLACHA_OSC_ESPERA,
+                );
+                if f.state.bolacha_osc_forma == BolachaOscForma::Senoidal {
+                    f.num(
+                        ui,
+                        "Pontos por ciclo:",
+                        "bolacha_osc_pontos_ciclo",
+                        tip::BOLACHA_OSC_PONTOS,
+                    );
+                }
+            }
         }
         f.num(
             ui,

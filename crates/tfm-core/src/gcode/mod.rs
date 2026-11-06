@@ -7,6 +7,7 @@
 //! `String`s vazias.
 
 pub mod bolacha;
+pub mod bolacha_osc;
 pub mod common;
 pub mod flat_plate;
 pub mod multiperfil;

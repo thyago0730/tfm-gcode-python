@@ -141,6 +141,33 @@ pub enum BolachaTipo {
     Aneis,
 }
 
+/// Forma da onda da oscilação da bolacha (`bolacha_osc_forma`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BolachaOscForma {
+    /// Vai e volta em retas, com vértices nos picos.
+    #[default]
+    #[serde(rename = "Triangular")]
+    Triangular,
+    /// Senoide, em `bolacha_osc_pontos_ciclo` pontos por ciclo.
+    #[serde(rename = "Senoidal")]
+    Senoidal,
+    /// Degraus: o X sobe e desce com a mesa parada.
+    #[serde(rename = "Quadrada")]
+    Quadrada,
+}
+
+/// Sentido do primeiro movimento radial da oscilação da bolacha.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BolachaOscSentido {
+    /// Primeiro rumo ao raio externo.
+    #[default]
+    #[serde(rename = "Para fora")]
+    ParaFora,
+    /// Primeiro rumo ao centro.
+    #[serde(rename = "Para dentro")]
+    ParaDentro,
+}
+
 /// Orientação dos cordões na chapa plana (`flat_orientation`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum FlatOrientation {
@@ -398,6 +425,26 @@ pub struct Params {
     pub bolacha_tipo: BolachaTipo,
     #[serde(deserialize_with = "lenient_bool")]
     pub bolacha_stop_between: bool,
+    /// Oscila na bolacha: o X (raio) vai e volta em torno da trajetória
+    /// enquanto a mesa gira. O comprimento (pico a pico) é
+    /// `oscilacao_comprimento`; a velocidade dos movimentos só em X é
+    /// `velocidade_oscilacao_mm_min`. Não existia no Python.
+    #[serde(deserialize_with = "lenient_bool")]
+    pub bolacha_oscilar: bool,
+    pub bolacha_osc_forma: BolachaOscForma,
+    pub bolacha_osc_sentido: BolachaOscSentido,
+    /// Período ao longo do arco (mm): quanto da trajetória um ciclo percorre.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub bolacha_osc_periodo_mm: f64,
+    /// Quanto a onda avança de uma camada para a seguinte, em % do ciclo.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub bolacha_osc_fase_camada_perc: f64,
+    /// Espera em cada pico (s); zero não espera.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub bolacha_osc_espera_s: f64,
+    /// Pontos por ciclo da senoide.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub bolacha_osc_pontos_ciclo: f64,
 
     // --- Oscilação ---------------------------------------------------------
     #[serde(deserialize_with = "lenient_f64")]
@@ -510,6 +557,13 @@ impl Default for Params {
             multiperfil_end_chamfer_angle_deg: 45.0,
             bolacha_tipo: BolachaTipo::EspiralContinua,
             bolacha_stop_between: false,
+            bolacha_oscilar: false,
+            bolacha_osc_forma: BolachaOscForma::Triangular,
+            bolacha_osc_sentido: BolachaOscSentido::ParaFora,
+            bolacha_osc_periodo_mm: 10.0,
+            bolacha_osc_fase_camada_perc: 0.0,
+            bolacha_osc_espera_s: 0.0,
+            bolacha_osc_pontos_ciclo: 12.0,
             oscilacao_comprimento: 5.0,
             deslocamento_angular_perc: 20.0,
             osc_test_gran_x: 0.5,
@@ -598,6 +652,14 @@ impl Params {
                 self.diametro_interno = d.diametro_interno;
                 self.bolacha_tipo = d.bolacha_tipo;
                 self.bolacha_stop_between = d.bolacha_stop_between;
+                self.bolacha_oscilar = d.bolacha_oscilar;
+                self.bolacha_osc_forma = d.bolacha_osc_forma;
+                self.bolacha_osc_sentido = d.bolacha_osc_sentido;
+                self.bolacha_osc_periodo_mm = d.bolacha_osc_periodo_mm;
+                self.bolacha_osc_fase_camada_perc = d.bolacha_osc_fase_camada_perc;
+                self.bolacha_osc_espera_s = d.bolacha_osc_espera_s;
+                self.bolacha_osc_pontos_ciclo = d.bolacha_osc_pontos_ciclo;
+                self.oscilacao_comprimento = d.oscilacao_comprimento;
                 self.overlap_angular_deg = d.overlap_angular_deg;
             }
             Operation::ChapaPlana => {

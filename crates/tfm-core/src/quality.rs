@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config::{read_json_value, write_json_pretty4};
-use crate::params::{lenient_f64, lenient_string, Params};
+use crate::params::{lenient_f64, lenient_string, Params, WeldingMode};
 
 /// Operadores (em `data_dir`).
 pub const OPERATORS_FILE: &str = "operators.json";
@@ -835,6 +835,18 @@ impl QualityManager {
         let osc_width = p.oscilacao_comprimento;
         if osc_width > 0.0 {
             let freq = feed / (2.0 * osc_width * 60.0);
+            if freq > 5.0 {
+                warnings.push(format!(
+                    "Frequência de oscilação estimada ({freq:.1} Hz) pode ser muito alta para a mesa."
+                ));
+            }
+        }
+
+        if p.welding_mode == WeldingMode::Bolacha
+            && p.bolacha_oscilar
+            && p.bolacha_osc_periodo_mm > 0.0
+        {
+            let freq = feed / (60.0 * p.bolacha_osc_periodo_mm);
             if freq > 5.0 {
                 warnings.push(format!(
                     "Frequência de oscilação estimada ({freq:.1} Hz) pode ser muito alta para a mesa."
