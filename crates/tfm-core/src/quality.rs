@@ -865,7 +865,13 @@ impl QualityManager {
 
         let current = p.corrente_arco;
         if current > 0.0 && feed > 0.0 {
-            let hi = Self::heat_input_kj_mm(p.tensao_arco, current, feed, 0.8);
+            // A eficiência dos parâmetros; inválida, a do plasma (0,6).
+            let eta = if p.eficiencia_termica.is_finite() && p.eficiencia_termica > 0.0 {
+                p.eficiencia_termica.min(1.0)
+            } else {
+                Params::default().eficiencia_termica
+            };
+            let hi = Self::heat_input_kj_mm(p.tensao_arco, current, feed, eta);
             if hi > 3.0 {
                 warnings.push(format!(
                     "Aporte Térmico muito alto ({hi:.2} kJ/mm). Risco de distorção/diluição excessiva."

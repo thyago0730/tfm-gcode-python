@@ -131,7 +131,7 @@ mod tip {
     pub const VAZAO_GAS: &str = "Argônio em l/min; entra no consumo e no custo.";
     pub const ALIM_PO: &str = "Ajuste do alimentador em %, só para registro.";
     pub const PREAQUECIMENTO: &str = "Temperatura de pré-aquecimento da peça, só para registro.";
-    pub const EFICIENCIA: &str = "Fator de rendimento do arco (0 a 1) no cálculo do heat input.";
+    pub const EFICIENCIA: &str = "Fração da potência do arco que entra na peça (0 a 1), no cálculo do aporte térmico. Plasma (PTA): 0,6, pela EN 1011-1 e o TWI.";
     pub const TAXA_G_H: &str =
         "Massa de pó depositada por hora; usada nas fórmulas de tempo por massa.";
     pub const VEL_OSC: &str = "Velocidade dos movimentos em X nas oscilações.";

@@ -771,7 +771,7 @@ mod tests {
         assert_eq!(s.fields["diametro"], "50.0");
         assert_eq!(s.fields["largura_cordao"], "8.0");
         assert_eq!(s.fields["sobreposicao"], "40.0");
-        assert_eq!(s.fields["eficiencia_termica"], "0.8");
+        assert_eq!(s.fields["eficiencia_termica"], "0.6");
         assert_eq!(s.fields["velocidade_oscilacao_mm_min"], "3000.0");
         assert_eq!(s.fields["bead_width_calibration_factor"], "1.00");
         assert_eq!(s.fields["num_camadas"], "1");

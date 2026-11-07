@@ -849,7 +849,7 @@ fn process_warnings_match_python_validate_parameters() {
         w,
         [
             "Frequência de oscilação estimada (10.0 Hz) pode ser muito alta para a mesa.",
-            "Aporte Térmico muito baixo (0.04 kJ/mm). Risco de falta de fusão.",
+            "Aporte Térmico muito baixo (0.03 kJ/mm). Risco de falta de fusão.",
         ]
     );
 
@@ -862,7 +862,29 @@ fn process_warnings_match_python_validate_parameters() {
     assert!(e.is_empty());
     assert_eq!(
         w,
+        ["Aporte Térmico muito alto (16.20 kJ/mm). Risco de distorção/diluição excessiva."]
+    );
+}
+
+/// O aviso de aporte usa a eficiência térmica dos parâmetros, não um 0,8 fixo.
+#[test]
+fn heat_input_warning_uses_the_thermal_efficiency_of_the_params() {
+    let slow = |eta: f64| Params {
+        velocidade_de_deposicao: 10.0,
+        oscilacao_comprimento: 0.0,
+        eficiencia_termica: eta,
+        ..Params::default()
+    };
+    let (w, _) = QualityManager::process_warnings(&slow(0.8));
+    assert_eq!(
+        w,
         ["Aporte Térmico muito alto (21.60 kJ/mm). Risco de distorção/diluição excessiva."]
+    );
+    // Inválida: vale o padrão de plasma, 0,6.
+    let (w, _) = QualityManager::process_warnings(&slow(0.0));
+    assert_eq!(
+        w,
+        ["Aporte Térmico muito alto (16.20 kJ/mm). Risco de distorção/diluição excessiva."]
     );
 }
 

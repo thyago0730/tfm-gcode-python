@@ -249,7 +249,13 @@ fn overrides_dos_casos_sao_os_esperados() {
     let typed = |name: &str, op: Operation| {
         let mut ui = UiState::from_params(&Params::default());
         ui.set_operation(op);
-        apply_overrides(&mut ui, &load_case(name))
+        let mut typed = apply_overrides(&mut ui, &load_case(name));
+        // Os casos trazem a eficiência térmica 0,8 do Python; o padrão agora é
+        // 0,6 (plasma), então todo caso a digita.
+        let pos = typed.iter().position(|k| k == "eficiencia_termica");
+        assert!(pos.is_some(), "{name}: os casos digitam a eficiência 0,8");
+        typed.remove(pos.unwrap());
+        typed
     };
     assert!(typed("espiral_padrao", Operation::Espiral).is_empty());
     assert_eq!(typed("bolacha_espiral", Operation::Bolacha), ["diametro"]);

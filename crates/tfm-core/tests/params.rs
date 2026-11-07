@@ -42,7 +42,7 @@ fn default_matches_python_ui_defaults() {
     assert_eq!(p.vazao_gas, 15.0);
     assert_eq!(p.alim_po, 50.0);
     assert_eq!(p.preaquecimento, 100.0);
-    assert_eq!(p.eficiencia_termica, 0.8);
+    assert_eq!(p.eficiencia_termica, 0.6); // plasma: EN 1011-1 e TWI
     assert_eq!(p.taxa_deposicao_g_h, 700.0);
     assert_eq!(p.num_camadas, 1);
     assert_eq!(p.espessura_camada, 1.5);

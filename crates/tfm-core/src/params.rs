@@ -552,7 +552,7 @@ impl Default for Params {
             vazao_gas: 15.0,
             alim_po: 50.0,
             preaquecimento: 100.0,
-            eficiencia_termica: 0.8,
+            eficiencia_termica: 0.6, // plasma (PTA): EN 1011-1 e TWI
             taxa_deposicao_g_h: 700.0,
             num_camadas: 1,
             espessura_camada: 1.5,

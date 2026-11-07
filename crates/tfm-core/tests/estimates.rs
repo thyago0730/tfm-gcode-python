@@ -671,8 +671,8 @@ fn formulas_are_raw_evaluate_block_output() {
 fn quality_metrics_follow_update_quality_metrics() {
     let p = params(Operation::Espiral);
     let e = compute(&p, &bare_config());
-    // (25 V * 180 A * 60 * 0.8) / 120 mm/min / 1000 = 1.8 kJ/mm
-    assert_close(e.heat_input_kj_mm, 1.8, 1e-12, "heat input");
+    // (25 V * 180 A * 60 * 0.6) / 120 mm/min / 1000 = 1.35 kJ/mm (plasma)
+    assert_close(e.heat_input_kj_mm, 1.35, 1e-12, "heat input");
     // po em g/min = taxa_deposicao_g_h / 60
     let dil = QualityManager::estimate_dilution(180.0, 700.0 / 60.0, 120.0);
     assert_eq!(e.dilution_pct, dil);
