@@ -97,7 +97,7 @@ mod tip {
     pub const BOLACHA_OSCILAR: &str = "O raio (X) vai e volta em torno da trajetória enquanto a \
         mesa gira. O passo entre voltas passa a usar a largura do cordão mais o comprimento da \
         oscilação, e a onda fecha dentro das bordas da peça.";
-    pub const BOLACHA_OSC_EIXO: &str = "Onde a tocha está montada. Em X ela fica à direita do centro e o X faz o raio e a oscilação. Em Y ela fica atrás, sobre o eixo Y, com X em 0: o Y faz o raio e a oscilação, para frente e para trás. A solda é a mesma; muda só o eixo da máquina.";
+    pub const BOLACHA_OSC_EIXO: &str = "Onde a tocha está montada. Vale para a espiral, os anéis e a oscilação. Em X ela fica à direita do centro e o X faz o raio (e a oscilação). Em Y ela fica atrás, sobre o eixo Y, com X em 0: o Y faz o raio (e a oscilação), para frente e para trás. A solda é a mesma; muda só o eixo da máquina.";
     pub const BOLACHA_OSC_COMPRIMENTO: &str =
         "Quanto a tocha varia de ponta a ponta (pico a pico). \
         No eixo X precisa caber na largura radial da bolacha; no Y não há esse limite.";
@@ -616,6 +616,16 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
             );
             f.combo(
                 ui,
+                "Eixo da tocha:",
+                |s| &mut s.bolacha_osc_eixo,
+                &[
+                    (BolachaOscEixo::X, "Tocha em X (à direita)"),
+                    (BolachaOscEixo::Y, "Tocha em Y (atrás)"),
+                ],
+                tip::BOLACHA_OSC_EIXO,
+            );
+            f.combo(
+                ui,
                 "Zero da peça:",
                 |s| &mut s.bolacha_zero,
                 &[
@@ -643,16 +653,6 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                 .copied()
                 .unwrap_or(false)
             {
-                f.combo(
-                    ui,
-                    "Eixo da oscilação:",
-                    |s| &mut s.bolacha_osc_eixo,
-                    &[
-                        (BolachaOscEixo::X, "Tocha em X (à direita)"),
-                        (BolachaOscEixo::Y, "Tocha em Y (atrás)"),
-                    ],
-                    tip::BOLACHA_OSC_EIXO,
-                );
                 f.num(
                     ui,
                     "Comprimento Osc. (mm):",

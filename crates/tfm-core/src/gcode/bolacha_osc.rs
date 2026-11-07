@@ -442,7 +442,7 @@ fn posiciona(v: &Vertice, a: f64) -> String {
 
 /// Tocha montada sobre o eixo Y: o raio que o programa escreve em X vai para
 /// o Y, e cada `G00` põe o X em 0.
-fn raio_em_y(seg: Vec<String>) -> Vec<String> {
+pub(crate) fn raio_em_y(seg: Vec<String>) -> Vec<String> {
     seg.into_iter()
         .map(|l| {
             if let Some(resto) = l.strip_prefix("(--- ANEL ") {

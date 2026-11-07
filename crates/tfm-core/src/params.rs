@@ -717,7 +717,7 @@ impl Params {
 
     /// Eixo da máquina que faz o raio na Bolacha: Y com a tocha em Y.
     pub fn bolacha_eixo_radial(&self) -> char {
-        if self.bolacha_oscilar && self.bolacha_osc_eixo == BolachaOscEixo::Y {
+        if self.bolacha_osc_eixo == BolachaOscEixo::Y {
             'Y'
         } else {
             'X'

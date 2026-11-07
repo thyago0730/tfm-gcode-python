@@ -19,7 +19,7 @@ use super::common::{
     f3, layer_separator, py_max, py_min, Pos,
 };
 use super::GenError;
-use crate::params::{BolachaTipo, Direction, Params};
+use crate::params::{BolachaOscEixo, BolachaTipo, Direction, Params};
 
 /// Resolução angular da espiral contínua (`deg_per_step`).
 const DEG_PER_STEP: f64 = 10.0;
@@ -398,5 +398,9 @@ fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
     );
     seg.push(format!("G00 Z{}", f3(z_seguranca)));
     seg.push(layer_separator(p, layer_num));
-    seg
+    // Tocha em Y: o Y faz o raio e o X fica em 0.
+    match p.bolacha_osc_eixo {
+        BolachaOscEixo::X => seg,
+        BolachaOscEixo::Y => super::bolacha_osc::raio_em_y(seg),
+    }
 }

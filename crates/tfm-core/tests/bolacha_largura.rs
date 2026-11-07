@@ -95,6 +95,7 @@ fn without_the_range_the_last_ring_is_squeezed() {
 #[test]
 fn speed_compensates_the_step() {
     let mut p = peca(false);
+    p.bolacha_osc_eixo = BolachaOscEixo::X;
     p.largura_cordao_min = 7.0;
     p.largura_cordao_max = 9.0;
     let largura = p.diametro / 2.0 - p.diametro_interno / 2.0;
