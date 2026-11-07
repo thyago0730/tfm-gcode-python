@@ -169,7 +169,16 @@ pub fn validate_physical(p: &Params) -> FieldErrors {
     }
 
     // 4. Granularidade X da quadrada contínua.
-    if Operation::from_params(p) == Operation::OscilacaoQuadradaContinua && p.osc_test_gran_x <= 0.0
+    let escada_bolacha =
+        p.welding_mode == WeldingMode::Bolacha && p.bolacha_oscilar && p.bolacha_osc_escada;
+    if escada_bolacha && p.osc_test_gran_a <= 0.0 {
+        fe.fail(
+            "Granularidade A deve ser maior que zero.",
+            &["osc_test_gran_a"],
+        );
+    }
+    if (Operation::from_params(p) == Operation::OscilacaoQuadradaContinua || escada_bolacha)
+        && p.osc_test_gran_x <= 0.0
     {
         fe.fail(
             "Granularidade X deve ser maior que zero.",

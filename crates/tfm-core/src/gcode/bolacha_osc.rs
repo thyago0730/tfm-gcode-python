@@ -319,6 +319,8 @@ struct Emissor {
     taxa: f64,
     feed_x: f64,
     espera: f64,
+    /// Granulada: `(gran_x mm, gran_a graus, limite de rpm)` da escada.
+    escada: Option<(f64, f64, f64)>,
     /// Ângulo da sessão no início do trecho atual (graus).
     base: f64,
     ultimo: (f64, f64),
@@ -341,7 +343,30 @@ impl Emissor {
                 continue;
             }
             let destino = (b.x, self.a_de(b.theta));
-            if dtheta.abs() < EPS {
+            if let Some((gran_x, gran_a, limite)) = self.escada {
+                // Escada da quadrada contínua: subpassos em X e em A, nunca
+                // os dois juntos.
+                let a0 = self.a_de(a.theta);
+                let da = self.a_de(b.theta) - a0;
+                let s = sub_steps(dx, gran_x).max(sub_steps(da, gran_a)).max(1);
+                let mut a_antes = a0;
+                for i in 1..=s {
+                    let frac = i as f64 / s as f64;
+                    let xi = a.x + dx * frac;
+                    let ai = a0 + da * frac;
+                    if dx.abs() >= EPS {
+                        seg.push(format!("G01 F{} X{}", f1(self.feed_x), f3(xi)));
+                    }
+                    if da.abs() >= EPS {
+                        let feed_a = angular_feed(self.taxa, xi, limite);
+                        seg.push(format!("G01 F{} A{}", f1(feed_a), f3(ai)));
+                        a_antes = ai - da / s as f64;
+                    }
+                }
+                if da.abs() >= EPS {
+                    self.cauda = (b.x, a_antes);
+                }
+            } else if dtheta.abs() < EPS {
                 // Só o raio anda, com a mesa parada.
                 seg.push(format!("G01 F{} X{}", f1(self.feed_x), f3(b.x)));
             } else {
@@ -375,6 +400,15 @@ impl Emissor {
             }
             self.ultimo = destino;
         }
+    }
+}
+
+/// `ceil(|d| ÷ gran)`, zero sem deslocamento (o `sub_steps` da quadrada contínua).
+fn sub_steps(d: f64, gran: f64) -> usize {
+    if d.abs() > 1e-9 {
+        (d.abs() / py_max(gran, 1e-6)).ceil() as usize
+    } else {
+        0
     }
 }
 
@@ -491,6 +525,11 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
         taxa,
         feed_x,
         espera: py_max(p.bolacha_osc_espera_s, 0.0),
+        escada: p.bolacha_osc_escada.then_some((
+            p.osc_test_gran_x,
+            p.osc_test_gran_a,
+            p.limite_rpm_placa,
+        )),
         base: 0.0,
         ultimo: (cam.vertices[0].x, a_ini),
         cauda: (cam.vertices[0].x, a_ini),

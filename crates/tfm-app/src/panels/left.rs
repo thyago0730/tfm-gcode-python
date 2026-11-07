@@ -51,8 +51,9 @@ mod tip {
     pub const COMPRIMENTO_OSC: &str = "Curso da oscilação em X dentro de cada volta.";
     pub const DESLOC_ANGULAR: &str = "Avanço angular entre oscilações, em % da largura do cordão.";
     pub const GRAN_X: &str =
-        "Tamanho do subpasso em X na quadrada contínua. Menor = mais linhas, movimento mais suave.";
-    pub const GRAN_A: &str = "Tamanho do subpasso em graus na quadrada contínua.";
+        "Tamanho do subpasso em X (na Bolacha, no eixo da tocha). Menor = mais linhas, movimento mais suave.";
+    pub const GRAN_A: &str = "Tamanho do subpasso em graus da mesa.";
+    pub const BOLACHA_OSC_ESCADA: &str = "Como a quadrada contínua: cada trecho em que o raio e a mesa andam juntos vira uma escada de subpassos, um G01 só no eixo da tocha (na velocidade da oscilação) e um G01 só em A, do tamanho da granularidade. Nenhuma linha move os dois juntos.";
     pub const QTD_PERFIS: &str = "Quantos cordões helicoidais paralelos ao redor do eixo.";
     pub const ANGULO_SETOR: &str = "Setor angular ocupado pelos perfis. 360° distribui igualmente.";
     pub const PASSO_PERFIL: &str = "Avanço axial por volta de cada perfil.";
@@ -700,6 +701,21 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                         "bolacha_osc_pontos_ciclo",
                         tip::BOLACHA_OSC_PONTOS,
                     );
+                }
+                f.flag(
+                    ui,
+                    "Granulada (escada)",
+                    "bolacha_osc_escada",
+                    tip::BOLACHA_OSC_ESCADA,
+                );
+                if f.state
+                    .flags
+                    .get("bolacha_osc_escada")
+                    .copied()
+                    .unwrap_or(false)
+                {
+                    f.num(ui, "Granularidade X (mm):", "osc_test_gran_x", tip::GRAN_X);
+                    f.num(ui, "Granularidade A (°):", "osc_test_gran_a", tip::GRAN_A);
                 }
             }
         }

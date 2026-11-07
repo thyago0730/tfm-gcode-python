@@ -749,3 +749,84 @@ fn no_line_has_nested_or_open_comments() {
     let avisos = gcode_invariants(&lines, &bolacha(BolachaOscForma::Triangular));
     assert!(avisos.iter().any(|a| a.contains("aninhado")), "{avisos:?}");
 }
+
+/// Granulada, como a quadrada contínua: cada trecho em que o raio e a mesa
+/// andam juntos vira uma escada de subpassos, um `G01 X` no avanço da
+/// oscilação e um `G01 A` na mesa, do tamanho da granularidade. Nenhuma linha
+/// move o eixo da tocha e o A juntos, e a onda passa pelos mesmos raios.
+#[test]
+fn granular_weave_is_a_staircase_like_the_continuous_square() {
+    for eixo in [BolachaOscEixo::X, BolachaOscEixo::Y] {
+        let raio_eixo = if eixo == BolachaOscEixo::X { 'X' } else { 'Y' };
+        for forma in FORMAS {
+            for tipo in [BolachaTipo::EspiralContinua, BolachaTipo::Aneis] {
+                let mut p = bolacha(forma);
+                p.bolacha_osc_eixo = eixo;
+                p.bolacha_tipo = tipo;
+                p.velocidade_oscilacao_mm_min = 900.0;
+                p.osc_test_gran_x = 0.5;
+                p.osc_test_gran_a = 2.0;
+                let continua = generate(&p).expect("gera");
+                assert!(!p.bolacha_osc_escada, "desligada por padrão");
+                p.bolacha_osc_escada = true;
+                let escada = generate(&p).expect("gera");
+                let what = format!("{eixo:?} {forma:?} {tipo:?}");
+
+                let (mut r, mut a) = (0.0, 0.0);
+                let (mut sx, mut sa) = (0, 0);
+                let mut dentro = false;
+                for l in &escada {
+                    if l.starts_with("(--- CAMADA") {
+                        dentro = true;
+                    }
+                    if l.starts_with("M102") {
+                        dentro = false;
+                    }
+                    let c = l.split('(').next().unwrap_or(l).trim();
+                    if !c.starts_with("G0") {
+                        continue;
+                    }
+                    let nr = word(c, raio_eixo).unwrap_or(r);
+                    let na = word(c, 'A').unwrap_or(a);
+                    if dentro && c.starts_with("G01") {
+                        let (dr, da) = (nr - r, na - a);
+                        assert!(
+                            dr.abs() < 1e-9 || da.abs() < 1e-9,
+                            "{what}: eixo e A juntos: {l}"
+                        );
+                        if dr.abs() > 1e-9 {
+                            assert!(dr.abs() <= 0.5 + 2e-3, "{what}: subpasso de {dr}: {l}");
+                            assert_eq!(word(c, 'F'), Some(900.0), "{what}: {l}");
+                            sx += 1;
+                        }
+                        if da.abs() > 1e-9 {
+                            assert!(da.abs() <= 2.0 + 2e-3, "{what}: subpasso de {da}°: {l}");
+                            sa += 1;
+                        }
+                    }
+                    (r, a) = (nr, na);
+                }
+                assert!(sx > 20 && sa > 20, "{what}: {sx} X e {sa} A");
+
+                // Mesmos raios extremos e o mesmo ângulo final da mesa.
+                let faixa = |g: &[String]| {
+                    g.iter()
+                        .filter(|l| l.starts_with("G01"))
+                        .filter_map(|l| word(l, raio_eixo))
+                        .fold((f64::MAX, f64::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)))
+                };
+                let (fc, fe) = (faixa(&continua), faixa(&escada));
+                assert!(
+                    (fc.0 - fe.0).abs() < 1e-3 && (fc.1 - fe.1).abs() < 1e-3,
+                    "{what}: {fc:?} contra {fe:?}"
+                );
+                let ultimo_a = |g: &[String]| g.iter().rev().find_map(|l| word(l, 'A')).unwrap();
+                assert!(
+                    (ultimo_a(&continua) - ultimo_a(&escada)).abs() < 1e-3,
+                    "{what}"
+                );
+                assert!(gcode_invariants(&escada, &p).is_empty(), "{what}");
+            }
+        }
+    }
+}

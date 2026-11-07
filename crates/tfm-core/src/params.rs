@@ -489,6 +489,12 @@ pub struct Params {
     /// Pontos por ciclo da senoide.
     #[serde(deserialize_with = "lenient_f64")]
     pub bolacha_osc_pontos_ciclo: f64,
+    /// Oscilação granulada, como a quadrada contínua: cada trecho em que o
+    /// raio e a mesa andam juntos vira uma escada de subpassos `G01 X` (no
+    /// avanço da oscilação, até `osc_test_gran_x` mm) e `G01 A` (até
+    /// `osc_test_gran_a` graus). Não existia no Python.
+    #[serde(deserialize_with = "lenient_bool")]
+    pub bolacha_osc_escada: bool,
 
     // --- Oscilação ---------------------------------------------------------
     #[serde(deserialize_with = "lenient_f64")]
@@ -616,6 +622,7 @@ impl Default for Params {
             bolacha_osc_fase_camada_perc: 0.0,
             bolacha_osc_espera_s: 0.0,
             bolacha_osc_pontos_ciclo: 12.0,
+            bolacha_osc_escada: false,
             oscilacao_comprimento: 5.0,
             deslocamento_angular_perc: 20.0,
             osc_test_gran_x: 0.5,
@@ -712,6 +719,7 @@ impl Params {
                 self.bolacha_osc_fase_camada_perc = d.bolacha_osc_fase_camada_perc;
                 self.bolacha_osc_espera_s = d.bolacha_osc_espera_s;
                 self.bolacha_osc_pontos_ciclo = d.bolacha_osc_pontos_ciclo;
+                self.bolacha_osc_escada = d.bolacha_osc_escada;
                 self.oscilacao_comprimento = d.oscilacao_comprimento;
                 self.overlap_angular_deg = d.overlap_angular_deg;
             }

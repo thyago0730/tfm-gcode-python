@@ -258,6 +258,7 @@ const FLAG_FIELDS: &[FlagField] = &[
     ),
     flag!("bolacha_stop_between", bolacha_stop_between),
     flag!("bolacha_oscilar", bolacha_oscilar),
+    flag!("bolacha_osc_escada", bolacha_osc_escada),
     flag!("smart_layers", smart_layers),
 ];
 
@@ -290,6 +291,7 @@ const PRESET_KEYS: &[&str] = &[
     "bolacha_osc_fase_camada_perc",
     "bolacha_osc_espera_s",
     "bolacha_osc_pontos_ciclo",
+    "bolacha_osc_escada",
     "largura_cordao_min",
     "largura_cordao_max",
     "overlap_angular_deg",
@@ -340,6 +342,7 @@ fn first_entry_keys(op: Operation) -> &'static [&'static str] {
             "bolacha_osc_fase_camada_perc",
             "bolacha_osc_espera_s",
             "bolacha_osc_pontos_ciclo",
+            "bolacha_osc_escada",
             "oscilacao_comprimento",
         ],
         Operation::ChapaPlana => &[
@@ -368,6 +371,7 @@ fn reset_keys(op: Operation) -> &'static [&'static str] {
             "bolacha_osc_fase_camada_perc",
             "bolacha_osc_espera_s",
             "bolacha_osc_pontos_ciclo",
+            "bolacha_osc_escada",
             "oscilacao_comprimento",
             "overlap_angular_deg",
         ],
