@@ -420,6 +420,10 @@ pub struct Params {
     /// o fixo do Python; a tela usa o `max_rpm_chuck` do perfil da máquina.
     #[serde(deserialize_with = "lenient_f64")]
     pub limite_rpm_placa: f64,
+    /// Setup, preaquecimento e esperas fora do arco (min), para o orçamento:
+    /// entra na mão de obra e na máquina. Não existia no Python.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub tempo_setup_min: f64,
     #[serde(deserialize_with = "lenient_bool")]
     pub flat_single_direction: bool,
     pub flat_orientation: FlatOrientation,
@@ -576,6 +580,7 @@ impl Default for Params {
             defasar_camadas: false,
             tempo_inverso_g93: false,
             limite_rpm_placa: 20.0,
+            tempo_setup_min: 0.0,
             flat_single_direction: false,
             flat_orientation: FlatOrientation::X,
             operacao_interna: false,

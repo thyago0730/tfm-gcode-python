@@ -16,9 +16,27 @@ Todos os números abaixo usam os parâmetros padrão: Ø50 × 50 mm, cordão de 
 sobreposição, 1,5 mm por camada, 1 camada, 120 mm/min, 180 A, 25 V, gás a 15 L/min,
 taxa de deposição de 700 g/h.
 
+## Estado das correções (07/11/2026)
+
+| # | Correção | Commit |
+|---|---|---|
+| C1, M1, M2, M3, B2 em parte | Tempo e custos pelo tempo de máquina do G-code, com os `G04`; camada raiz em todas as operações | `2d2a292` |
+| C2 | Pó físico: volume × densidade ÷ rendimento, densidade e rendimento por pó | `f50fd60` |
+| A1 | Eficiência térmica padrão 0,6 e aviso de aporte pelos parâmetros | `fa8df5b` |
+| C3 | Opção de G-code em tempo inverso (G93) | `d298886` |
+| A3 | Espessura pelo balanço de massa, com aviso acima de 15% | `052a066` |
+| A2, M6 | "Índice de diluição (relativo)" e "Sobreposição obtida" | `56f0a31` |
+| B1 | Rotação da Bolacha até o limite do perfil da máquina | `21d32a0` |
+| B3 | Tempo de setup opcional na mão de obra e na máquina | o commit seguinte |
+
+Em aberto, porque pedem dado de oficina: calibrar a diluição com macrografias (A2), a
+sobreposição ótima (M4) e a largura efetiva (M5) com corpos de prova, conferir na máquina se o
+Mach3 lê os graus de A como milímetros (C3, uma volta da Espiral padrão em 1,31 min), e a nota de
+uniformidade (M6), que ainda usa os pesos herdados.
+
 ## Resumo
 
-| # | Cálculo | Gravidade | Situação |
+| # | Cálculo | Gravidade | Situação original |
 |---|---|---|---|
 | C1 | Tempo das três oscilações | Crítica | 6 a 16 vezes maior que o real |
 | C2 | Consumo de pó (e custo do pó) | Crítica | Valor fixo para todas as operações, sem base física |

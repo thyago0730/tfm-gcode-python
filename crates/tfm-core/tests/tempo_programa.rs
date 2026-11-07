@@ -174,3 +174,25 @@ fn a_customized_formula_still_overrides() {
     let e = compute(&params(Operation::Espiral), &cfg);
     assert_eq!(e.costs.labor_cost, 123.0);
 }
+
+/// O setup (opcional) entra na mão de obra e na máquina, não no tempo de arco
+/// nem no gás.
+#[test]
+fn setup_time_adds_to_labor_and_machine_only() {
+    let cfg = AppConfig::default();
+    let p = params(Operation::Espiral);
+    assert_eq!(p.tempo_setup_min, 0.0);
+    let base = compute(&p, &cfg);
+    let mut q = p.clone();
+    q.tempo_setup_min = 30.0;
+    let e = compute(&q, &cfg);
+    assert_eq!(e.time_hours, base.time_hours, "tempo de arco igual");
+    assert_eq!(e.costs.gas_m3, base.costs.gas_m3, "gás igual");
+    let mo = e.costs.labor_cost - base.costs.labor_cost;
+    let mq = e.costs.machine_cost - base.costs.machine_cost;
+    assert!((mo - 0.5 * cfg.costs.labor_brl_hour).abs() < 1e-9, "{mo}");
+    assert!((mq - 0.5 * cfg.costs.machine_brl_hour).abs() < 1e-9, "{mq}");
+    // Negativo ou inválido não desconta.
+    q.tempo_setup_min = -10.0;
+    assert_eq!(compute(&q, &cfg).costs.labor_cost, base.costs.labor_cost);
+}

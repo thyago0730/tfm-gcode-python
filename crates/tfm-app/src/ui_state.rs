@@ -194,6 +194,7 @@ const NUM_FIELDS: &[NumField] = &[
     num!("alim_po", alim_po),
     num!("preaquecimento", preaquecimento),
     num!("eficiencia_termica", eficiencia_termica),
+    num!("tempo_setup_min", tempo_setup_min),
     num!("taxa_deposicao_g_h", taxa_deposicao_g_h),
     num!("espessura_camada", espessura_camada),
     num!("internal_face_clearance_x", internal_face_clearance_x),

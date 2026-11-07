@@ -295,10 +295,16 @@ pub fn compute_with_program(p: &Params, cfg: &AppConfig, lines: Option<&[String]
         custo_gas = v;
         custo_consumiveis = custo_po + custo_gas;
     }
-    let labor_cost =
-        num_custom("labor_cost_brl").unwrap_or(tempo_total_horas * costs.labor_brl_hour);
+    // Mão de obra e máquina pagam também o setup, que não é tempo de arco.
+    let setup_h = if p.tempo_setup_min.is_finite() && p.tempo_setup_min > 0.0 {
+        p.tempo_setup_min / 60.0
+    } else {
+        0.0
+    };
+    let horas_pagas = tempo_total_horas + setup_h;
+    let labor_cost = num_custom("labor_cost_brl").unwrap_or(horas_pagas * costs.labor_brl_hour);
     let machine_cost =
-        num_custom("machine_cost_brl").unwrap_or(tempo_total_horas * costs.machine_brl_hour);
+        num_custom("machine_cost_brl").unwrap_or(horas_pagas * costs.machine_brl_hour);
     let custo_operacional = labor_cost + machine_cost;
     let custo_total = num_custom("total_cost_brl").unwrap_or(custo_consumiveis + custo_operacional);
     let consumo_gas_m3 = consumo_gas_m3_hora * tempo_total_horas;
