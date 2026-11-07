@@ -424,6 +424,14 @@ pub struct Params {
     /// entra na mão de obra e na máquina. Não existia no Python.
     #[serde(deserialize_with = "lenient_f64")]
     pub tempo_setup_min: f64,
+    /// Bolacha: faixa aceita da largura do cordão (mm). Ligada (mínimo > 0), o
+    /// número de anéis é escolhido para o passo fechar a largura da peça, com
+    /// a largura dentro da faixa e a velocidade compensando o passo. Zero:
+    /// desligada. Não existia no Python.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub largura_cordao_min: f64,
+    #[serde(deserialize_with = "lenient_f64")]
+    pub largura_cordao_max: f64,
     #[serde(deserialize_with = "lenient_bool")]
     pub flat_single_direction: bool,
     pub flat_orientation: FlatOrientation,
@@ -581,6 +589,8 @@ impl Default for Params {
             tempo_inverso_g93: false,
             limite_rpm_placa: 20.0,
             tempo_setup_min: 0.0,
+            largura_cordao_min: 0.0,
+            largura_cordao_max: 0.0,
             flat_single_direction: false,
             flat_orientation: FlatOrientation::X,
             operacao_interna: false,

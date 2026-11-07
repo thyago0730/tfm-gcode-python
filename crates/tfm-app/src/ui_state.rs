@@ -181,6 +181,8 @@ const NUM_FIELDS: &[NumField] = &[
     num!("torch_ignite_delay_s", torch_ignite_delay_s),
     num!("torch_extinguish_delay_s", torch_extinguish_delay_s),
     num!("overlap_angular_deg", overlap_angular_deg),
+    num!("largura_cordao_min", largura_cordao_min),
+    num!("largura_cordao_max", largura_cordao_max),
     num!(
         "bead_width_calibration_factor",
         bead_width_calibration_factor,
@@ -288,6 +290,8 @@ const PRESET_KEYS: &[&str] = &[
     "bolacha_osc_fase_camada_perc",
     "bolacha_osc_espera_s",
     "bolacha_osc_pontos_ciclo",
+    "largura_cordao_min",
+    "largura_cordao_max",
     "overlap_angular_deg",
     "bead_width_calibration_factor",
     "osc_test_gran_x",

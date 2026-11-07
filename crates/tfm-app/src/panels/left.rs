@@ -21,7 +21,7 @@ use crate::icons::draw_operation_icon;
 use crate::theme::Palette;
 use crate::ui_state::{has_advanced, internal_applicable, is_oscillation, LeftTab, UiState};
 use crate::widgets::{
-    check_field, combo_field, kpi, num_field, section, text_field, NUM_FIELD_WIDTH,
+    check_field, combo_field, kpi, num_field, range_field, section, text_field, NUM_FIELD_WIDTH,
 };
 
 /// Altura de cada ícone da faixa de operações.
@@ -89,6 +89,7 @@ mod tip {
         pó e tempo. A rotação muda até 2,5 vezes: confira se ela continua dentro da EPS.";
     pub const ESPESSURA_BALANCO: &str = "Espessura que a taxa de deposição faz: pó depositado no tempo de arco ÷ (densidade × área revestida × camadas). Fica vermelha quando difere mais de 15% da pedida.";
     pub const SETUP: &str = "Tempo fora do arco por peça (montagem, preaquecimento, esperas de interpasse), para o orçamento. Entra na mão de obra e na máquina; não muda o tempo de solda nem o gás. Zero: não soma nada.";
+    pub const LARGURA_FAIXA: &str = "Faixa aceita da largura do cordão (mm). Ligada, o app escolhe quantos anéis cabem para o passo fechar a largura da peça por igual, sem o último anel espremido contra a borda, e ajusta a velocidade na proporção do passo para a espessura não mudar (passo maior, tocha mais devagar). Zero nos dois desliga.";
     pub const TEMPO_INVERSO: &str = "Gera o programa em G93: cada linha traz o próprio tempo (F = 1 ÷ minutos). A velocidade sobre a peça fica certa qualquer que seja o raio do eixo A configurado no Mach3. Desligado, o F vale em G94 e supõe o Mach3 lendo os graus de A como milímetros.";
     pub const DEFASAR_CAMADAS: &str = "Cada camada parte em um ângulo diferente (360° ÷ nº de         camadas), o que desloca os passes em X sem mudar o passo nem o X do programa. Os cumes de         uma camada caem nos vales da anterior, e o relevo entre passes não soma. Com uma camada         não muda nada.";
     pub const BOLACHA_OSCILAR: &str = "O raio (X) vai e volta em torno da trajetória enquanto a \
@@ -252,6 +253,18 @@ impl Form<'_> {
             if num_field(ui, label, text, tip, invalid) {
                 self.changed = true;
             }
+        }
+    }
+
+    /// Dois campos numéricos na mesma linha: "mín. até máx.".
+    fn range(&mut self, ui: &mut Ui, label: &str, keys: (&'static str, &'static str), tip: &str) {
+        let invalid = self.state.invalid.contains(keys.0) || self.state.invalid.contains(keys.1);
+        let mut min = self.state.fields.get(keys.0).cloned().unwrap_or_default();
+        let mut max = self.state.fields.get(keys.1).cloned().unwrap_or_default();
+        if range_field(ui, label, &mut min, &mut max, tip, invalid) {
+            self.state.fields.insert(keys.0, min);
+            self.state.fields.insert(keys.1, max);
+            self.changed = true;
         }
     }
 
@@ -604,6 +617,12 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                 "Desligar entre passes",
                 "bolacha_stop_between",
                 tip::PARAR_ANEIS,
+            );
+            f.range(
+                ui,
+                "Largura cordão (mín. até máx.):",
+                ("largura_cordao_min", "largura_cordao_max"),
+                tip::LARGURA_FAIXA,
             );
             f.flag(ui, "Oscilar", "bolacha_oscilar", tip::BOLACHA_OSCILAR);
             if f.state

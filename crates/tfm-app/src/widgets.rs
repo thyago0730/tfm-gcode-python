@@ -60,6 +60,36 @@ pub fn num_field(ui: &mut Ui, label: &str, value: &mut String, tip: &str, invali
     })
 }
 
+/// Rótulo + dois campos numéricos curtos, "mín. até máx.". Devolve `true` se
+/// algum mudou.
+pub fn range_field(
+    ui: &mut Ui,
+    label: &str,
+    min: &mut String,
+    max: &mut String,
+    tip: &str,
+    invalid: bool,
+) -> bool {
+    field_row(ui, label, tip, |ui| {
+        let palette = Palette::resolve(ui.ctx());
+        let mut changed = false;
+        // Direita para a esquerda: o máximo vem primeiro.
+        for (i, value) in [max, min].into_iter().enumerate() {
+            if i == 1 {
+                ui.label("até");
+            }
+            let mut edit = TextEdit::singleline(value).desired_width(NUM_FIELD_WIDTH / 2.2);
+            if invalid {
+                edit = edit.background_color(invalid_tint(palette.danger));
+            }
+            let response = edit.show(ui).response.response;
+            changed |= response.changed();
+            with_tip(response, tip);
+        }
+        changed
+    })
+}
+
 /// Rótulo + campo de texto livre que ocupa o resto da linha.
 /// Devolve `true` se o texto mudou.
 pub fn text_field(ui: &mut Ui, label: &str, value: &mut String, tip: &str) -> bool {

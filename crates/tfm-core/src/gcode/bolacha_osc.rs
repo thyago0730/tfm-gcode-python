@@ -53,9 +53,12 @@ pub struct Faixa {
     pub c_int: f64,
     /// Maior raio do centro do cordão: `r_ext` menos meia oscilação.
     pub c_ext: f64,
-    /// Passo radial: `(largura + oscilação) × (1 − sobreposição)`.
+    /// Passo radial: `(largura + oscilação) × (1 − sobreposição)`, ou o ajustado
+    /// à largura da peça com a faixa de largura ligada.
     pub passo: f64,
     pub num_voltas: i64,
+    /// Fator da velocidade de solda que compensa o passo ajustado (1 sem ajuste).
+    pub fator_velocidade: f64,
 }
 
 pub fn faixa(p: &Params) -> Faixa {
@@ -68,23 +71,15 @@ pub fn faixa(p: &Params) -> Faixa {
         let meio = (r_int + r_ext) / 2.0;
         (meio, meio)
     };
-    let passo = py_max(
-        (p.largura_cordao + amp) * (1.0 - p.sobreposicao / 100.0),
-        1e-6,
-    );
-    let largura = c_ext - c_int;
-    let num_voltas = if largura > 0.0 {
-        (largura / passo).ceil() as i64
-    } else {
-        1
-    };
+    let ajuste = super::bolacha::passo_radial(p, c_ext - c_int, amp);
     Faixa {
         r_int,
         r_ext,
         c_int,
         c_ext,
-        passo,
-        num_voltas,
+        passo: ajuste.passo,
+        num_voltas: ajuste.num_voltas,
+        fator_velocidade: ajuste.fator_velocidade,
     }
 }
 
@@ -448,7 +443,7 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
     let eixo = p.bolacha_osc_eixo;
     let z_layer = (layer_num as f64 * p.espessura_camada) + p.afastamento_tocha;
     let z_seguranca = z_layer + p.afastamento_seguranca;
-    let taxa = apply_smart_layers(p, layer_num, p.taxa());
+    let taxa = apply_smart_layers(p, layer_num, p.taxa()) * f.fator_velocidade;
     let feed_x = if p.velocidade_oscilacao_mm_min != 0.0 {
         p.velocidade_oscilacao_mm_min
     } else {

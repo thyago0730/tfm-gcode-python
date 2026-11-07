@@ -152,6 +152,17 @@ pub fn validate_physical(p: &Params) -> FieldErrors {
         );
     }
 
+    // Faixa de largura da bolacha: desligada com os dois em zero.
+    if p.welding_mode == WeldingMode::Bolacha
+        && (p.largura_cordao_min != 0.0 || p.largura_cordao_max != 0.0)
+        && !(p.largura_cordao_min > 0.0 && p.largura_cordao_max >= p.largura_cordao_min)
+    {
+        fe.fail(
+            "Largura do cordão: o mínimo deve ser maior que zero e não passar do máximo (zero nos dois desliga o ajuste).",
+            &["largura_cordao_min", "largura_cordao_max"],
+        );
+    }
+
     // Oscilação da bolacha: o envelope da onda precisa caber no raio da peça.
     if p.welding_mode == WeldingMode::Bolacha && p.bolacha_oscilar {
         bolacha_oscilation_rules(p, &mut fe);

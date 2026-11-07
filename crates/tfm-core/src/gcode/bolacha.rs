@@ -54,6 +54,83 @@ pub(crate) fn angular_feed(taxa_de_deposicao: f64, x_pos: f64, limite_rpm: f64) 
     rpm * 360.0
 }
 
+/// Passo radial da Bolacha e o que ele muda na solda.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PassoRadial {
+    /// Distância entre anéis (ou por volta da espiral), em mm.
+    pub passo: f64,
+    /// Voltas radiais: são `num_voltas + 1` anéis.
+    pub num_voltas: i64,
+    /// Largura do cordão que esse passo supõe (mm).
+    pub largura: f64,
+    /// Fator da velocidade de solda: passo nominal ÷ passo, para a massa por
+    /// área ficar a mesma. 1 sem ajuste.
+    pub fator_velocidade: f64,
+}
+
+/// Passo radial para cobrir `largura_radial` mm (entre o primeiro e o último
+/// centro de cordão), com `extra` mm somados à largura (a oscilação).
+///
+/// Sem a faixa de largura, é o passo da sobreposição e o último anel fica
+/// encostado na borda, mais perto do anterior. Com a faixa (`largura_cordao_min`
+/// a `largura_cordao_max`), escolhe o número de anéis cujo passo fecha a largura
+/// exatamente, dentro da faixa e o mais perto do nominal. Se nenhum couber, o
+/// mais perto da faixa.
+pub fn passo_radial(p: &Params, largura_radial: f64, extra: f64) -> PassoRadial {
+    let ov = 1.0 - p.sobreposicao / 100.0;
+    let nominal = py_max((p.largura_cordao + extra) * ov, 1e-6);
+    let voltas = |passo: f64| {
+        if largura_radial > 0.0 {
+            (largura_radial / passo).ceil() as i64
+        } else {
+            1
+        }
+    };
+    let padrao = PassoRadial {
+        passo: nominal,
+        num_voltas: voltas(nominal),
+        largura: p.largura_cordao,
+        fator_velocidade: 1.0,
+    };
+    let (w_min, w_max) = (p.largura_cordao_min, p.largura_cordao_max);
+    if !(w_min > 0.0 && w_max >= w_min && largura_radial > 0.0 && ov > 0.0) {
+        return padrao;
+    }
+    let (s_min, s_max) = ((w_min + extra) * ov, (w_max + extra) * ov);
+    let ideal = largura_radial / nominal;
+    let candidatos = [
+        ideal.floor(),
+        ideal.ceil(),
+        (largura_radial / s_max).ceil(),
+        (largura_radial / s_min).floor(),
+    ];
+    // Fora da faixa conta como distância até ela; dentro, a distância ao
+    // nominal desempata. Assim, se nenhum número de anéis cabe na faixa, vale
+    // o mais perto dela, e os passos continuam iguais.
+    let custo = |s: f64| {
+        let fora = (s_min - s).max(0.0) + (s - s_max).max(0.0);
+        (fora, (s - nominal).abs())
+    };
+    let escolha = candidatos
+        .iter()
+        .filter(|n| **n >= 1.0)
+        .map(|n| (*n, largura_radial / n))
+        .min_by(|a, b| {
+            custo(a.1)
+                .partial_cmp(&custo(b.1))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    match escolha {
+        Some((n, s)) => PassoRadial {
+            passo: s,
+            num_voltas: n as i64,
+            largura: s / ov - extra,
+            fator_velocidade: nominal / s,
+        },
+        None => padrao,
+    }
+}
+
 /// Limite de rpm válido: o pedido, ou 20 quando inválido.
 pub(crate) fn rpm_cap(limite: f64) -> f64 {
     if limite.is_finite() && limite > 0.0 {
@@ -79,21 +156,14 @@ fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
     let r_int = py_max(p.diametro_interno / 2.0, p.largura_cordao / 2.0);
     let radial_width = py_max(0.0, r_ext - r_int);
 
-    let taxa_de_deposicao = apply_smart_layers(p, layer_num, p.taxa());
-    let larg_cordao = p.largura_cordao;
-    let sobreposicao = p.sobreposicao;
     let angular_overlap = p.overlap_angular_deg;
 
-    // Passo radial baseado na sobreposição.
-    let passo_radial = larg_cordao * (1.0 - (sobreposicao / 100.0));
-    let passo_radial = py_max(passo_radial, 1e-6);
-
-    // Número de voltas (passes radiais); `math.ceil` devolve int no Python.
-    let num_voltas: i64 = if radial_width > 0.0 {
-        (radial_width / passo_radial).ceil() as i64
-    } else {
-        1
-    };
+    // Passo radial pela sobreposição (ou ajustado à largura da peça, com a
+    // faixa de largura ligada); a velocidade compensa o passo.
+    let ajuste = passo_radial(p, radial_width, 0.0);
+    let taxa_de_deposicao = apply_smart_layers(p, layer_num, p.taxa()) * ajuste.fator_velocidade;
+    let passo_radial = ajuste.passo;
+    let num_voltas = ajuste.num_voltas;
     let rotation_sign = p.rotation_sign();
 
     // Início em X (raio) e sentido do avanço radial. O Python também calcula

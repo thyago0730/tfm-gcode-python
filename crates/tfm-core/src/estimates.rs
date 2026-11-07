@@ -964,7 +964,13 @@ fn bolacha(p: &Params, s: &Shared) -> ModeOutcome {
             radial_width = f.c_ext - f.c_int;
             (f.c_int, f.c_ext)
         }
-        None => (r_int, r_ext),
+        None => {
+            let ajuste = crate::gcode::bolacha::passo_radial(p, radial_width, 0.0);
+            if ajuste.fator_velocidade != 1.0 {
+                passo = ajuste.passo;
+            }
+            (r_int, r_ext)
+        }
     };
     let num_voltas = match &osc {
         Some(f) => f.num_voltas as f64,
