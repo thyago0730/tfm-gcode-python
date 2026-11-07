@@ -620,3 +620,65 @@ fn bolacha_rpm_cap_follows_the_param_limit() {
         );
     }
 }
+
+/// Depois da volta de 360° de cada anel, a sobreposição angular e a troca de
+/// raio vão em reta: o raio só anda num sentido, sem a onda voltar por cima do
+/// começo do anel.
+#[test]
+fn ring_change_does_not_weave() {
+    for forma in FORMAS {
+        for parar in [false, true] {
+            let mut p = bolacha(forma);
+            p.bolacha_tipo = BolachaTipo::Aneis;
+            p.bolacha_stop_between = parar;
+            // Disco grande: os 10° de sobreposição cobrem vários ciclos da onda.
+            p.diametro = 200.0;
+            p.diametro_interno = 160.0;
+            let lines = generate(&p).expect("gera");
+            let (mut x, mut a) = (0.0, 0.0);
+            let mut a0: Option<f64> = None;
+            let mut depois: Vec<f64> = Vec::new();
+            let mut checados = 0;
+            let confere = |xs: &mut Vec<f64>| {
+                let d: Vec<f64> = xs
+                    .windows(2)
+                    .map(|w| w[1] - w[0])
+                    .filter(|d| d.abs() > 1e-6)
+                    .collect();
+                let vai = d.iter().any(|d| *d > 0.0);
+                let volta = d.iter().any(|d| *d < 0.0);
+                assert!(
+                    !(vai && volta),
+                    "{forma:?} parar={parar}: oscila na troca {xs:?}"
+                );
+                xs.clear();
+            };
+            for l in &lines {
+                if l.starts_with("(--- ANEL") || l.starts_with("(--- CAMADA") {
+                    if depois.len() > 1 {
+                        checados += 1;
+                    }
+                    confere(&mut depois);
+                    a0 = None;
+                }
+                let c = l.split('(').next().unwrap_or(l);
+                if c.starts_with("G0") && !c.contains('Z') {
+                    let antes = a;
+                    x = word(c, 'X').unwrap_or(x);
+                    a = word(c, 'A').unwrap_or(a);
+                    if c.starts_with("G01") {
+                        let ini = *a0.get_or_insert(antes);
+                        if (a - ini).abs() > 360.0 + 1e-6 {
+                            if depois.is_empty() {
+                                depois.push(x);
+                            }
+                            depois.push(x);
+                        }
+                    }
+                }
+            }
+            confere(&mut depois);
+            assert!(checados > 0 || parar, "{forma:?}: nenhuma troca conferida");
+        }
+    }
+}

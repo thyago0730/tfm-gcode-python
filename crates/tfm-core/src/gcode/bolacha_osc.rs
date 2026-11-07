@@ -299,6 +299,14 @@ impl<'a> Caminhante<'a> {
         );
     }
 
+    /// Anda até `ate` graus em reta até o raio `x_destino`, sem onda: a fase
+    /// fica parada, e a onda continua dali no trecho seguinte.
+    fn transita(&mut self, ate: f64, x_destino: f64) {
+        let desloc = self.onda.deslocamento(self.fase);
+        self.theta = py_max(self.theta, ate);
+        self.empurra(self.theta, x_destino, desloc, false);
+    }
+
     /// Entrega os vértices novos, mantendo o último para a continuidade.
     fn drena(&mut self) -> Vec<Vertice> {
         let n = self.vertices.len();
@@ -519,13 +527,13 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
                 let vs = cam.drena();
                 em.emite(&mut seg, &vs);
                 let inicio = cam.theta;
+                // Sobreposição angular e troca de raio em reta, sem oscilar: a
+                // onda não volta por cima do começo do anel.
                 if v < f.num_voltas && !p.bolacha_stop_between {
                     let proximo = clamp_c(x_start + (v + 1) as f64 * f.passo * x_sinal);
-                    cam.anda(inicio + ov, |th| {
-                        x_pos + (proximo - x_pos) * ((th - inicio) / ov.max(EPS)).clamp(0.0, 1.0)
-                    });
+                    cam.transita(inicio + ov, proximo);
                 } else {
-                    cam.anda(inicio + ov, |_| x_pos);
+                    cam.transita(inicio + ov, x_pos);
                 }
                 let vs = cam.drena();
                 em.emite(&mut seg, &vs);
