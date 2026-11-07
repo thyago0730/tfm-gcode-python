@@ -152,6 +152,17 @@ pub fn validate_physical(p: &Params) -> FieldErrors {
         );
     }
 
+    // Zero no diâmetro interno precisa de um furo.
+    if p.welding_mode == WeldingMode::Bolacha
+        && p.bolacha_zero == crate::params::BolachaZero::DiametroInterno
+        && p.bolacha_zero_mm() <= 0.0
+    {
+        fe.fail(
+            "Zero no diâmetro interno: informe o diâmetro interno da peça.",
+            &["bolacha_zero", "diametro_interno"],
+        );
+    }
+
     // Faixa de largura da bolacha: desligada com os dois em zero.
     if p.welding_mode == WeldingMode::Bolacha
         && (p.largura_cordao_min != 0.0 || p.largura_cordao_max != 0.0)

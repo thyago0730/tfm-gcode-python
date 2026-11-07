@@ -141,6 +141,19 @@ pub enum BolachaTipo {
     Aneis,
 }
 
+/// Onde fica o zero do eixo radial na Bolacha (`bolacha_zero`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BolachaZero {
+    /// Zero no centro da peça: o eixo radial escreve o raio.
+    #[default]
+    #[serde(rename = "Centro")]
+    Centro,
+    /// Zero na borda do furo: o eixo radial escreve `raio − raio interno`, e a
+    /// tocha não precisa ir ao centro.
+    #[serde(rename = "Diâmetro interno")]
+    DiametroInterno,
+}
+
 /// Forma da onda da oscilação da bolacha (`bolacha_osc_forma`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BolachaOscForma {
@@ -495,6 +508,9 @@ pub struct Params {
     /// `osc_test_gran_a` graus). Não existia no Python.
     #[serde(deserialize_with = "lenient_bool")]
     pub bolacha_osc_escada: bool,
+    /// Zero do eixo radial da Bolacha: centro ou diâmetro interno. Não existia
+    /// no Python.
+    pub bolacha_zero: BolachaZero,
 
     // --- Oscilação ---------------------------------------------------------
     #[serde(deserialize_with = "lenient_f64")]
@@ -623,6 +639,7 @@ impl Default for Params {
             bolacha_osc_espera_s: 0.0,
             bolacha_osc_pontos_ciclo: 12.0,
             bolacha_osc_escada: false,
+            bolacha_zero: BolachaZero::Centro,
             oscilacao_comprimento: 5.0,
             deslocamento_angular_perc: 20.0,
             osc_test_gran_x: 0.5,
@@ -683,6 +700,30 @@ impl Params {
         }
     }
 
+    /// Quanto o zero radial da Bolacha está afastado do centro (mm): o raio
+    /// interno com o zero no diâmetro interno, senão zero.
+    pub fn bolacha_zero_mm(&self) -> f64 {
+        let r = self.diametro_interno / 2.0;
+        if self.welding_mode == WeldingMode::Bolacha
+            && self.bolacha_zero == BolachaZero::DiametroInterno
+            && r.is_finite()
+            && r > 0.0
+        {
+            r
+        } else {
+            0.0
+        }
+    }
+
+    /// Eixo da máquina que faz o raio na Bolacha: Y com a tocha em Y.
+    pub fn bolacha_eixo_radial(&self) -> char {
+        if self.bolacha_oscilar && self.bolacha_osc_eixo == BolachaOscEixo::Y {
+            'Y'
+        } else {
+            'X'
+        }
+    }
+
     /// `1.0 if rotation_dir == 'horaria' else -1.0`.
     pub fn rotation_sign(&self) -> f64 {
         match self.sentido_rotacao {
@@ -720,6 +761,7 @@ impl Params {
                 self.bolacha_osc_espera_s = d.bolacha_osc_espera_s;
                 self.bolacha_osc_pontos_ciclo = d.bolacha_osc_pontos_ciclo;
                 self.bolacha_osc_escada = d.bolacha_osc_escada;
+                self.bolacha_zero = d.bolacha_zero;
                 self.oscilacao_comprimento = d.oscilacao_comprimento;
                 self.overlap_angular_deg = d.overlap_angular_deg;
             }

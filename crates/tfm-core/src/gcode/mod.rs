@@ -60,6 +60,7 @@ pub fn generate_with_timestamp(p: &Params, timestamp: &str) -> Result<Vec<String
             }
         },
     }?;
+    let lines = bolacha::zero_no_diametro_interno(lines, &p);
     Ok(if p.tempo_inverso_g93 {
         common::to_inverse_time(&lines)
     } else {

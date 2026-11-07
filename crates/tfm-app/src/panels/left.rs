@@ -11,8 +11,8 @@ use egui::{
 use tfm_core::config::AppConfig;
 use tfm_core::deposit::LocalProcess;
 use tfm_core::params::{
-    BolachaOscEixo, BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, FlatOrientation,
-    MultiperfilStrategy, Operation, ProfileShape, Rotation,
+    BolachaOscEixo, BolachaOscForma, BolachaOscSentido, BolachaTipo, BolachaZero, Direction,
+    FlatOrientation, MultiperfilStrategy, Operation, ProfileShape, Rotation,
 };
 use tfm_core::quality::QualityManager;
 
@@ -90,6 +90,7 @@ mod tip {
         pó e tempo. A rotação muda até 2,5 vezes: confira se ela continua dentro da EPS.";
     pub const ESPESSURA_BALANCO: &str = "Espessura que a taxa de deposição faz: pó depositado no tempo de arco ÷ (densidade × área revestida × camadas). Fica vermelha quando difere mais de 15% da pedida.";
     pub const SETUP: &str = "Tempo fora do arco por peça (montagem, preaquecimento, esperas de interpasse), para o orçamento. Entra na mão de obra e na máquina; não muda o tempo de solda nem o gás. Zero: não soma nada.";
+    pub const BOLACHA_ZERO: &str = "Onde você zera o eixo radial (X, ou Y com a tocha em Y). Centro: o programa escreve o raio. Diâmetro interno: zere na borda do furo; o programa escreve raio − raio interno, e a tocha não vai até o centro, o que poupa curso da máquina. A mesa continua girando em torno do centro da peça.";
     pub const LARGURA_FAIXA: &str = "Faixa aceita da largura do cordão (mm). Ligada, o app escolhe quantos anéis cabem para o passo fechar a largura da peça por igual, sem o último anel espremido contra a borda, e ajusta a velocidade na proporção do passo para a espessura não mudar (passo maior, tocha mais devagar). Zero nos dois desliga.";
     pub const TEMPO_INVERSO: &str = "Gera o programa em G93: cada linha traz o próprio tempo (F = 1 ÷ minutos). A velocidade sobre a peça fica certa qualquer que seja o raio do eixo A configurado no Mach3. Desligado, o F vale em G94 e supõe o Mach3 lendo os graus de A como milímetros.";
     pub const DEFASAR_CAMADAS: &str = "Cada camada parte em um ângulo diferente (360° ÷ nº de         camadas), o que desloca os passes em X sem mudar o passo nem o X do programa. Os cumes de         uma camada caem nos vales da anterior, e o relevo entre passes não soma. Com uma camada         não muda nada.";
@@ -612,6 +613,16 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                     (BolachaTipo::Aneis, "Anéis (Passo a Passo)"),
                 ],
                 tip::TIPO_BOLACHA,
+            );
+            f.combo(
+                ui,
+                "Zero da peça:",
+                |s| &mut s.bolacha_zero,
+                &[
+                    (BolachaZero::Centro, "Centro"),
+                    (BolachaZero::DiametroInterno, "Diâmetro interno"),
+                ],
+                tip::BOLACHA_ZERO,
             );
             f.flag(
                 ui,

@@ -441,6 +441,10 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
         _ => Mapping::Cylindrical,
     };
 
+    let bolacha_off = match (p.bolacha_zero_mm(), p.bolacha_eixo_radial()) {
+        (off, 'Y') => (0.0, off),
+        (off, _) => (off, 0.0),
+    };
     let mut machine = Machine::default();
     // Em G93 o F é `1 ÷ minutos` da linha; a velocidade vem da distância.
     let mut inverse = false;
@@ -526,15 +530,19 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
                 if rapid && out.has_points() {
                     out.split();
                 }
+                // Zero no diâmetro interno: o programa escreve o raio menos o
+                // raio interno; na peça, soma-se de volta.
+                let (ox, oy) = bolacha_off;
+                let (px, py, mx, my) = (prev.x + ox, prev.y + oy, m.x + ox, m.y + oy);
                 if !rapid {
                     for (t, a) in angular_steps(prev.a, m.a) {
-                        let r = prev.x + (m.x - prev.x) * t;
-                        let y = prev.y + (m.y - prev.y) * t;
+                        let r = px + (mx - px) * t;
+                        let y = py + (my - py) * t;
                         let height = prev.z + (m.z - prev.z) * t;
                         out.push(frame.point(on_table(height, r, y, a), r, a), r);
                     }
                 }
-                out.push(frame.point(on_table(m.z, m.x, m.y, m.a), m.x, m.a), m.x);
+                out.push(frame.point(on_table(m.z, mx, my, m.a), mx, m.a), mx);
             }
             Mapping::Cylindrical => {
                 let r = radius_at(m.z);

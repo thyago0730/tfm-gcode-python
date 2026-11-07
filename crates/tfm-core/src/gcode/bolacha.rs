@@ -131,6 +131,71 @@ pub fn passo_radial(p: &Params, largura_radial: f64, extra: f64) -> PassoRadial 
     }
 }
 
+/// Zero radial no diâmetro interno: da primeira camada em diante, o eixo
+/// radial (X, ou Y com a tocha em Y) escreve `raio − raio interno`, nos
+/// movimentos e nos comentários dos anéis. Linhas `G53` (coordenada de
+/// máquina) e o cabeçalho ficam como estão. Com o zero no centro, nada muda.
+pub fn zero_no_diametro_interno(lines: Vec<String>, p: &Params) -> Vec<String> {
+    let off = p.bolacha_zero_mm();
+    if off <= 0.0 {
+        return lines;
+    }
+    let eixo = p.bolacha_eixo_radial();
+    let Some(ini) = lines.iter().position(|l| l.starts_with("(--- CAMADA")) else {
+        return lines;
+    };
+    let mut out = Vec::with_capacity(lines.len() + 1);
+    out.extend_from_slice(&lines[..ini]);
+    out.push(format!(
+        "(ZERO {eixo} NO DIAMETRO INTERNO: {eixo}0 = RAIO {} MM)",
+        f3(off)
+    ));
+    let anel = format!(" em {eixo}=");
+    for l in &lines[ini..] {
+        if l.starts_with("(--- ANEL") {
+            if let Some(k) = l.find(&anel) {
+                let resto = &l[k + anel.len()..];
+                let fim = resto.find(' ').unwrap_or(resto.len());
+                if let Ok(v) = resto[..fim].parse::<f64>() {
+                    out.push(format!(
+                        "{}{}{}",
+                        &l[..k + anel.len()],
+                        f3(v - off),
+                        &resto[fim..]
+                    ));
+                    continue;
+                }
+            }
+            out.push(l.clone());
+            continue;
+        }
+        let (codigo, comentario) = match l.find('(') {
+            Some(k) => (l[..k].trim_end(), &l[k..]),
+            None => (l.as_str(), ""),
+        };
+        if !codigo.starts_with("G0") || codigo.contains("G53") {
+            out.push(l.clone());
+            continue;
+        }
+        let tokens: Vec<String> = codigo
+            .split_whitespace()
+            .map(
+                |t| match t.strip_prefix(eixo).and_then(|v| v.parse::<f64>().ok()) {
+                    Some(v) => format!("{eixo}{}", f3(v - off)),
+                    None => t.to_string(),
+                },
+            )
+            .collect();
+        let mut linha = tokens.join(" ");
+        if !comentario.is_empty() {
+            linha.push(' ');
+            linha.push_str(comentario);
+        }
+        out.push(linha);
+    }
+    out
+}
+
 /// Limite de rpm válido: o pedido, ou 20 quando inválido.
 pub(crate) fn rpm_cap(limite: f64) -> f64 {
     if limite.is_finite() && limite > 0.0 {

@@ -26,8 +26,9 @@ use indexmap::IndexMap;
 use tfm_core::config::AppConfig;
 use tfm_core::gcode::multiperfil::profile_definition;
 use tfm_core::params::{
-    BolachaOscEixo, BolachaOscForma, BolachaOscSentido, BolachaTipo, Direction, FlatOrientation,
-    MultiperfilStrategy, Operation, OscillationType, Params, ProfileShape, Rotation,
+    BolachaOscEixo, BolachaOscForma, BolachaOscSentido, BolachaTipo, BolachaZero, Direction,
+    FlatOrientation, MultiperfilStrategy, Operation, OscillationType, Params, ProfileShape,
+    Rotation,
 };
 use tfm_core::validator::{py_float, validate_physical};
 
@@ -282,6 +283,7 @@ const PRESET_KEYS: &[&str] = &[
     "operacao_interna",
     "internal_face_clearance_x",
     "bolacha_tipo",
+    "bolacha_zero",
     "bolacha_stop_between",
     "bolacha_oscilar",
     "bolacha_osc_forma",
@@ -436,6 +438,7 @@ pub struct UiState {
     pub bolacha_osc_forma: BolachaOscForma,
     pub bolacha_osc_eixo: BolachaOscEixo,
     pub bolacha_osc_sentido: BolachaOscSentido,
+    pub bolacha_zero: BolachaZero,
     /// Pó escolhido no combo; vazio = o `active_powder` do config.
     pub powder_name: String,
     /// Último estado de cada operação já visitada (`mode_presets` do Python).
@@ -475,6 +478,7 @@ impl UiState {
             bolacha_osc_forma: p.bolacha_osc_forma,
             bolacha_osc_eixo: p.bolacha_osc_eixo,
             bolacha_osc_sentido: p.bolacha_osc_sentido,
+            bolacha_zero: p.bolacha_zero,
             powder_name: p.powder_name.clone(),
             presets: HashMap::new(),
             invalid: HashSet::new(),
@@ -545,6 +549,7 @@ impl UiState {
         p.bolacha_osc_forma = self.bolacha_osc_forma;
         p.bolacha_osc_eixo = self.bolacha_osc_eixo;
         p.bolacha_osc_sentido = self.bolacha_osc_sentido;
+        p.bolacha_zero = self.bolacha_zero;
         p.apply_operation(self.operation);
 
         // Leads só com "Usar início e fim extra" (como `_get_current_params`).
@@ -671,6 +676,7 @@ impl UiState {
                 "bolacha_osc_forma" => self.bolacha_osc_forma = p.bolacha_osc_forma,
                 "bolacha_osc_eixo" => self.bolacha_osc_eixo = p.bolacha_osc_eixo,
                 "bolacha_osc_sentido" => self.bolacha_osc_sentido = p.bolacha_osc_sentido,
+                "bolacha_zero" => self.bolacha_zero = p.bolacha_zero,
                 other => log::debug!("UiState::write_key: chave desconhecida {other:?}"),
             }
         }
