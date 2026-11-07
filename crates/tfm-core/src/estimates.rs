@@ -506,8 +506,12 @@ struct Shared {
     circunferencia: f64,
     /// `comprimento_revestir`.
     h: f64,
-    /// `powder_factor` (g/mm²).
-    peso: f64,
+    /// Espessura pedida por camada (mm).
+    espessura: f64,
+    /// Densidade do pó (g/cm³).
+    densidade: f64,
+    /// Rendimento de deposição (%), entre 0 e 100.
+    rendimento: f64,
     lead_in: f64,
     lead_out: f64,
     larg_cordao: f64,
@@ -525,7 +529,19 @@ impl Shared {
         Shared {
             circunferencia: PI * diameter,
             h: p.comprimento_revestir,
-            peso: p.powder_factor,
+            espessura: py_max(p.espessura_camada, 0.0),
+            densidade: if p.densidade_po_g_cm3.is_finite() && p.densidade_po_g_cm3 > 0.0 {
+                p.densidade_po_g_cm3
+            } else {
+                Params::default().densidade_po_g_cm3
+            },
+            rendimento: if p.rendimento_deposicao_perc.is_finite()
+                && p.rendimento_deposicao_perc > 0.0
+            {
+                p.rendimento_deposicao_perc.min(100.0)
+            } else {
+                Params::default().rendimento_deposicao_perc
+            },
             lead_in: p.lead_in,
             lead_out: p.lead_out,
             larg_cordao: p.largura_cordao,
@@ -534,6 +550,13 @@ impl Shared {
             num_camadas: p.num_camadas as f64,
             limits: cfg.active_limits(),
         }
+    }
+
+    /// Pó (g) para revestir `area` mm² com uma camada de espessura pedida:
+    /// volume × densidade ÷ rendimento de deposição.
+    fn po_g(&self, area: f64) -> f64 {
+        let volume_mm3 = area * self.espessura;
+        volume_mm3 * self.densidade / 1000.0 / (self.rendimento / 100.0)
     }
 
     /// `rpm > max_rpm_chuck`.
@@ -584,8 +607,7 @@ fn rotary_powder_kg(s: &Shared) -> f64 {
     } else {
         0.0
     };
-    let consumo_po_g = (area_total + area_leads) * s.peso;
-    consumo_po_g / 1000.0
+    s.po_g(area_total + area_leads) / 1000.0
 }
 
 /// Não finito -> 0.0 (só nos campos de texto).
@@ -720,7 +742,8 @@ fn multiperfil(p: &Params, s: &Shared) -> ModeOutcome {
     let area_total_perfil =
         comprimento_helice_perfil * s.larg_cordao * total_subpasses_por_perfil as f64;
     let area_total = area_total_perfil * perfil_count as f64;
-    let consumo_po_g = area_total * s.peso;
+    // Cada subpasse cobre o passo entre cordões, não a largura inteira.
+    let consumo_po_g = s.po_g(area_total * (1.0 - s.sobreposicao / 100.0));
     ModeOutcome {
         rotation: ResultText {
             text: txt3(rot_min_por_volta),
@@ -760,7 +783,7 @@ fn chapa_plana(p: &Params, s: &Shared) -> ModeOutcome {
     let area_camada = part_width * s.h;
     let area_total = area_camada * s.num_camadas;
     let area_leads = part_width * (s.lead_in + s.lead_out) * s.num_camadas;
-    let consumo_po_g = (area_total + area_leads) * s.peso;
+    let consumo_po_g = s.po_g(area_total + area_leads);
     ModeOutcome {
         rotation: ResultText {
             text: "0.000".to_string(),
@@ -930,9 +953,11 @@ fn bolacha(p: &Params, s: &Shared) -> ModeOutcome {
     let comprimento_total_mov = comprimento_total_mov * fator_onda;
     let tempo_min_total = comprimento_total_mov / py_max(s.taxa, 1e-6)
         + comprimento_total_mov / fator_onda * espera_s_por_mm / 60.0;
-    let area_camada = PI * (r_ext.powi(2) - r_int.powi(2));
-    let area_total = area_camada * s.num_camadas;
-    let consumo_po_g = area_total * s.peso;
+    // A face revestida vai do furo à borda: o centro do cordão começa em meia
+    // largura, mas o material cobre até o furo.
+    let r_face = (p.diametro_interno / 2.0).clamp(0.0, r_ext.max(0.0));
+    let area_face = PI * (r_ext.powi(2) - r_face.powi(2));
+    let consumo_po_g = s.po_g(area_face * s.num_camadas);
     let rot_min_por_volta_ext = if r_ext > 0.0 && s.taxa > 0.0 {
         (2.0 * PI * r_ext) / s.taxa
     } else {

@@ -92,6 +92,12 @@ fn assert_finite_text(what: &str, text: &str) {
     );
 }
 
+/// kg de pó para um volume depositado (mm³): densidade padrão 8,46 g/cm³ e
+/// rendimento de 87%.
+fn po_fisico(volume_mm3: f64) -> f64 {
+    volume_mm3 * 8.46e-3 / 0.87 / 1000.0
+}
+
 /// Custos sem override de fórmula, a partir do pó (kg) e do tempo (h), com os
 /// custos padrão (250/50/40/30) e `powder_cost_brl_kg` dos params (450).
 fn assert_default_costs(e: &Estimates, kg: f64, hours: f64) {
@@ -232,7 +238,7 @@ fn espiral_arithmetic_matches_python() {
     // pó: (área das camadas + área dos leads) * fator / 1000
     let area_total = circ * h * 2.0;
     let area_leads = circ * (5.0 + 3.0) * 2.0;
-    let kg = (area_total + area_leads) * 0.16 / 1000.0;
+    let kg = po_fisico((area_total + area_leads) * 1.5);
     assert_default_costs(&e, kg, minutos / 60.0);
 }
 
@@ -268,7 +274,7 @@ fn chapa_arithmetic_matches_python() {
     assert_eq!(e.pitch.text, format!("{passo:.3} (lat)"));
     assert_eq!(e.time_hhmm, hhmm(minutos));
     assert_close(e.time_hours, minutos / 60.0, 1e-9, "time_hours");
-    assert_default_costs(&e, 100.0 * 50.0 * 0.16 / 1000.0, minutos / 60.0);
+    assert_default_costs(&e, po_fisico(100.0 * 50.0 * 1.5), minutos / 60.0);
     // A chapa não valida limites de máquina (o Python não toca as cores)
     let mut longa = p.clone();
     longa.comprimento_revestir = 5000.0;
@@ -298,7 +304,8 @@ fn bolacha_aneis_arithmetic_matches_python() {
     assert_eq!(e.pitch.text, format!("{passo:.3} (rad)"));
     assert_eq!(e.time_hhmm, hhmm(minutos));
     assert_close(e.time_hours, minutos / 60.0, 1e-9, "time_hours");
-    let kg = PI * (r_ext.powi(2) - r_int.powi(2)) * 0.16 / 1000.0;
+    let r_face = p.diametro_interno / 2.0;
+    let kg = po_fisico(PI * (r_ext.powi(2) - r_face.powi(2)) * 1.5);
     assert_default_costs(&e, kg, minutos / 60.0);
     assert!(!e.rotation.over_limit && !e.pitch.over_limit);
 }
@@ -350,7 +357,7 @@ fn oscillation_linear_exact_values() {
     let minutos = 11.0 * (circ / 120.0);
     assert_eq!(e.time_hhmm, hhmm(minutos));
     assert_close(e.time_hours, minutos / 60.0, 1e-9, "time_hours");
-    assert_default_costs(&e, circ * 50.0 * 0.16 / 1000.0, minutos / 60.0);
+    assert_default_costs(&e, po_fisico(circ * 50.0 * 1.5), minutos / 60.0);
     assert!(!e.rotation.over_limit && !e.pitch.over_limit);
 
     // Quadrada: modelo das pernas em X e passos angulares; contínua zera o giro.
@@ -402,7 +409,7 @@ fn multiperfil_texts_and_time() {
     let minutos = mov / 120.0; // sem multiplicar por num_camadas
     assert_eq!(e.time_hhmm, hhmm(minutos));
     assert_close(e.time_hours, minutos / 60.0, 1e-9, "time_hours");
-    let kg = helice_perfil * 8.0 * subpasses as f64 * 4.0 * 0.16 / 1000.0;
+    let kg = po_fisico(helice_perfil * 8.0 * 0.6 * subpasses as f64 * 4.0 * 1.5);
     assert_default_costs(&e, kg, minutos / 60.0);
 
     // Fechamento das pontas soma 2 voltas por subpasse

@@ -159,6 +159,36 @@ pub struct Powder {
     pub density_factor_g_mm2: f64,
     #[serde(deserialize_with = "lenient_f64")]
     pub cost_brl_kg: f64,
+    /// Densidade da liga (g/cm³). Vazia: a conhecida pelo nome, ou 8,46.
+    /// Não existia no Python.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub density_g_cm3: Option<f64>,
+    /// Rendimento de deposição (%). Vazio: 87%. Não existia no Python.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub yield_perc: Option<f64>,
+}
+
+/// Densidades (g/cm³) dos pós padrão de PTA, pelas fichas dos fabricantes.
+pub const DENSIDADES_CONHECIDAS: [(&str, f64); 9] = [
+    ("Inconel 625", 8.44),
+    ("Stellite 6", 8.46),
+    ("Stellite 12", 8.56),
+    ("Stellite 21", 8.33),
+    ("WC-Ni (Carbeto)", 14.5),
+    ("Aço Inox 316L", 7.99),
+    ("Aço Inox 309L", 7.90),
+    ("Bronze Alumínio", 7.60),
+    ("Hastelloy C-276", 8.89),
+];
+
+/// Densidade conhecida de um pó padrão de PTA, pelo nome (sem diferenciar
+/// maiúsculas).
+pub fn densidade_conhecida(name: &str) -> Option<f64> {
+    let name = name.trim().to_lowercase();
+    DENSIDADES_CONHECIDAS
+        .iter()
+        .find(|(n, _)| n.to_lowercase() == name)
+        .map(|(_, d)| *d)
 }
 
 impl Default for Powder {
@@ -168,6 +198,8 @@ impl Default for Powder {
             name: "Pó padrão".to_string(),
             density_factor_g_mm2: 0.16,
             cost_brl_kg: 250.0,
+            density_g_cm3: None,
+            yield_perc: None,
         }
     }
 }

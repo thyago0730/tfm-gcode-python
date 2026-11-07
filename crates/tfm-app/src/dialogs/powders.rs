@@ -32,6 +32,10 @@ pub struct PowderEditor {
     pub name: String,
     pub factor: String,
     pub cost: String,
+    /// Densidade (g/cm³); vazia usa a conhecida pelo nome ou 8,46.
+    pub density: String,
+    /// Rendimento de deposição (%); vazio usa 87%.
+    pub yield_perc: String,
 }
 
 impl PowderEditor {
@@ -41,6 +45,8 @@ impl PowderEditor {
             name: String::new(),
             factor: "0.16".to_string(),
             cost: "0.0".to_string(),
+            density: String::new(),
+            yield_perc: String::new(),
         }
     }
 
@@ -50,6 +56,8 @@ impl PowderEditor {
             name: p.name.clone(),
             factor: fmt_num(p.density_factor_g_mm2),
             cost: fmt_num(p.cost_brl_kg),
+            density: p.density_g_cm3.map(fmt_num).unwrap_or_default(),
+            yield_perc: p.yield_perc.map(fmt_num).unwrap_or_default(),
         }
     }
 
@@ -65,10 +73,32 @@ impl PowderEditor {
         let cost = parse_num(&self.cost)
             .filter(|v| *v >= 0.0)
             .ok_or("Custo (R$/kg) inválido: use um número maior ou igual a zero.")?;
+        let optional =
+            |text: &str, ok: fn(f64) -> bool, err: &str| -> Result<Option<f64>, String> {
+                if text.trim().is_empty() {
+                    return Ok(None);
+                }
+                parse_num(text)
+                    .filter(|v| ok(*v))
+                    .map(Some)
+                    .ok_or_else(|| err.to_string())
+            };
+        let density = optional(
+            &self.density,
+            |v| v > 0.0,
+            "Densidade (g/cm³) inválida: use um número maior que zero ou deixe vazio.",
+        )?;
+        let yield_perc = optional(
+            &self.yield_perc,
+            |v| v > 0.0 && v <= 100.0,
+            "Rendimento (%) inválido: use um número entre 0 e 100 ou deixe vazio.",
+        )?;
         Ok(Powder {
             name: name.to_string(),
             density_factor_g_mm2: factor,
             cost_brl_kg: cost,
+            density_g_cm3: density,
+            yield_perc,
         })
     }
 }
@@ -83,6 +113,8 @@ pub fn add_pta_defaults(powders: &mut Vec<Powder>) -> usize {
                 name: name.to_string(),
                 density_factor_g_mm2: factor,
                 cost_brl_kg: cost,
+                density_g_cm3: tfm_core::config::densidade_conhecida(name),
+                yield_perc: None,
             });
             added += 1;
         }
@@ -186,6 +218,8 @@ fn table(ui: &mut egui::Ui, state: &mut PowdersState, accent: Color32) {
         .column(Column::remainder().at_least(150.0))
         .column(Column::initial(130.0).at_least(90.0))
         .column(Column::initial(110.0).at_least(90.0))
+        .column(Column::initial(120.0).at_least(90.0))
+        .column(Column::initial(110.0).at_least(80.0))
         .header(20.0, |mut header| {
             header.col(|ui| {
                 ui.strong("Nome");
@@ -195,6 +229,12 @@ fn table(ui: &mut egui::Ui, state: &mut PowdersState, accent: Color32) {
             });
             header.col(|ui| {
                 ui.strong("Custo (R$/kg)");
+            });
+            header.col(|ui| {
+                ui.strong("Densidade (g/cm³)");
+            });
+            header.col(|ui| {
+                ui.strong("Rendimento (%)");
             });
         })
         .body(|mut body| {
@@ -222,6 +262,26 @@ fn table(ui: &mut egui::Ui, state: &mut PowdersState, accent: Color32) {
                     });
                     row.col(|ui| {
                         ui.monospace(fmt_num(p.cost_brl_kg));
+                    });
+                    row.col(|ui| match p.density_g_cm3 {
+                        Some(d) => {
+                            ui.monospace(fmt_num(d));
+                        }
+                        None => {
+                            let auto =
+                                tfm_core::config::densidade_conhecida(&p.name).unwrap_or(8.46);
+                            ui.weak(format!("{} (auto)", fmt_num(auto))).on_hover_text(
+                                "Sem valor cadastrado: conhecida pelo nome ou padrão.",
+                            );
+                        }
+                    });
+                    row.col(|ui| match p.yield_perc {
+                        Some(r) => {
+                            ui.monospace(fmt_num(r));
+                        }
+                        None => {
+                            ui.weak("87 (auto)");
+                        }
                     });
                     if row.response().clicked() {
                         clicked = Some(i);
@@ -347,6 +407,24 @@ pub fn show(app: &mut TfmApp, state: &mut PowdersState, ctx: &egui::Context, ope
                         "Custo do pó por quilograma.",
                         bad,
                     );
+                    let bad = !editor.density.trim().is_empty()
+                        && parse_num(&editor.density).is_none();
+                    num_field(
+                        ui,
+                        "Densidade (g/cm³):",
+                        &mut editor.density,
+                        "Densidade da liga. A massa de pó é o volume depositado vezes ela. Vazia: a conhecida pelo nome da liga ou 8,46.",
+                        bad,
+                    );
+                    let bad = !editor.yield_perc.trim().is_empty()
+                        && parse_num(&editor.yield_perc).is_none();
+                    num_field(
+                        ui,
+                        "Rendimento (%):",
+                        &mut editor.yield_perc,
+                        "Quanto do pó alimentado vira cordão. Vazio: 87%, típico do PTA.",
+                        bad,
+                    );
                     ui.horizontal(|ui| {
                         if ui.button("Confirmar").clicked() {
                             confirm = true;
@@ -411,6 +489,7 @@ mod tests {
             name: "Stellite 6".to_string(),
             density_factor_g_mm2: 0.2,
             cost_brl_kg: 1.0,
+            ..Powder::default()
         }];
         assert_eq!(add_pta_defaults(&mut powders), 8);
         assert_eq!(powders.len(), 9);
@@ -433,6 +512,24 @@ mod tests {
         ed.cost = "300".into();
         let p = ed.parse().expect("válido");
         assert_eq!((p.density_factor_g_mm2, p.cost_brl_kg), (0.2, 300.0));
+        assert_eq!(
+            (p.density_g_cm3, p.yield_perc),
+            (None, None),
+            "vazios: automáticos"
+        );
+        ed.density = "0".into();
+        assert!(ed.parse().is_err());
+        ed.density = "14,5".into();
+        ed.yield_perc = "120".into();
+        assert!(ed.parse().is_err(), "rendimento acima de 100%");
+        ed.yield_perc = "80".into();
+        let p = ed.parse().expect("válido");
+        assert_eq!((p.density_g_cm3, p.yield_perc), (Some(14.5), Some(80.0)));
+        let back = PowderEditor::edit(0, &p);
+        assert_eq!(
+            (back.density.as_str(), back.yield_perc.as_str()),
+            ("14.5", "80.0")
+        );
     }
 
     #[test]
@@ -445,6 +542,7 @@ mod tests {
             name: "Pó padrão".into(),
             factor: "0.1".into(),
             cost: "1".into(),
+            ..PowderEditor::default()
         });
         assert!(st.commit_editor().is_err(), "nome duplicado");
         st.editor = Some(PowderEditor {
@@ -452,6 +550,7 @@ mod tests {
             name: "X".into(),
             factor: "0.1".into(),
             cost: "1".into(),
+            ..PowderEditor::default()
         });
         assert_eq!(st.commit_editor(), Ok("X".to_string()));
         assert_eq!(st.selected, Some(1));

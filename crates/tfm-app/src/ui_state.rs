@@ -558,7 +558,16 @@ impl UiState {
             } else {
                 self.powder_name.clone()
             };
-            match cfg.powder(&name) {
+            let padrao = Params::default();
+            let valido = |v: Option<f64>| v.filter(|x| x.is_finite() && *x > 0.0);
+            let powder = cfg.powder(&name);
+            p.densidade_po_g_cm3 = valido(powder.and_then(|w| w.density_g_cm3))
+                .or_else(|| tfm_core::config::densidade_conhecida(&name))
+                .unwrap_or(padrao.densidade_po_g_cm3);
+            p.rendimento_deposicao_perc = valido(powder.and_then(|w| w.yield_perc))
+                .map(|v| v.min(100.0))
+                .unwrap_or(padrao.rendimento_deposicao_perc);
+            match powder {
                 Some(powder) => {
                     p.powder_factor = powder.density_factor_g_mm2;
                     p.powder_cost_brl_kg = powder.cost_brl_kg;
@@ -955,6 +964,7 @@ mod tests {
             name: "Stellite 6".to_string(),
             density_factor_g_mm2: 0.2,
             cost_brl_kg: 900.0,
+            ..Powder::default()
         });
         let mut s = UiState {
             powder_name: "Stellite 6".to_string(),
@@ -973,6 +983,40 @@ mod tests {
 
         s.powder_name.clear();
         assert_eq!(s.to_params(&cfg).powder_name, cfg.active_powder);
+    }
+
+    /// Densidade e rendimento: os do pó cadastrado; sem eles, a densidade
+    /// conhecida da liga pelo nome; sem nada, os padrões (8,46 e 87%).
+    #[test]
+    fn powder_density_and_yield_resolution() {
+        let mut cfg = cfg();
+        cfg.powders.push(Powder {
+            name: "WC-Ni (Carbeto)".to_string(),
+            ..Powder::default()
+        });
+        cfg.powders.push(Powder {
+            name: "Minha liga".to_string(),
+            density_g_cm3: Some(7.5),
+            yield_perc: Some(70.0),
+            ..Powder::default()
+        });
+        let mut s = UiState {
+            powder_name: "WC-Ni (Carbeto)".to_string(),
+            ..UiState::default()
+        };
+        let p = s.to_params(&cfg);
+        assert_eq!(p.densidade_po_g_cm3, 14.5);
+        assert_eq!(p.rendimento_deposicao_perc, 87.0);
+
+        s.powder_name = "Minha liga".to_string();
+        let p = s.to_params(&cfg);
+        assert_eq!(p.densidade_po_g_cm3, 7.5);
+        assert_eq!(p.rendimento_deposicao_perc, 70.0);
+
+        s.powder_name = "inexistente".to_string();
+        let p = s.to_params(&cfg);
+        assert_eq!(p.densidade_po_g_cm3, 8.46);
+        assert_eq!(p.rendimento_deposicao_perc, 87.0);
     }
 
     /// Os campos da oscilação da bolacha fazem a volta, voltam ao padrão e

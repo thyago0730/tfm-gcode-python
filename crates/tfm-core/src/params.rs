@@ -379,6 +379,14 @@ pub struct Params {
     pub espessura_camada: f64,
     #[serde(deserialize_with = "lenient_f64")]
     pub powder_factor: f64,
+    /// Densidade do pó (g/cm³): a massa depositada é o volume vezes ela.
+    /// Vem do pó escolhido. Não existia no Python.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub densidade_po_g_cm3: f64,
+    /// Quanto do pó alimentado vira cordão (%). O resto se perde fora da poça.
+    /// Vem do pó escolhido. Não existia no Python.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub rendimento_deposicao_perc: f64,
     #[serde(deserialize_with = "lenient_f64")]
     pub powder_cost_brl_kg: f64,
     #[serde(deserialize_with = "lenient_bool")]
@@ -549,6 +557,8 @@ impl Default for Params {
             num_camadas: 1,
             espessura_camada: 1.5,
             powder_factor: 0.16,
+            densidade_po_g_cm3: 8.46,
+            rendimento_deposicao_perc: 87.0,
             powder_cost_brl_kg: 450.0,
             torch_retract_on_ignite: true,
             spiral_close_ends: false,
