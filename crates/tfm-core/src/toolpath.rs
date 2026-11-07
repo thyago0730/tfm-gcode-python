@@ -289,6 +289,75 @@ fn on_table(height: f64, radius: f64, y: f64, a_deg: f64) -> Vec3 {
     vec3(radius * c - y * s, radius * s + y * c, height)
 }
 
+/// Tempo de máquina de um programa (min): o dos movimentos `G01` e o das
+/// esperas `G04`. Os `G0` vão na velocidade rápida da máquina, que o programa
+/// não conhece, e ficam de fora.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MachineTime {
+    pub feed_min: f64,
+    pub dwell_min: f64,
+}
+
+impl MachineTime {
+    pub fn total_min(&self) -> f64 {
+        self.feed_min + self.dwell_min
+    }
+}
+
+/// Soma, linha a linha, a distância que o Mach3 lê (X, Y, Z em mm e A em
+/// graus) dividida pelo F de cada `G01`, e os segundos de cada `G04 P`. Em
+/// `G93` (tempo inverso) o F já é `1 ÷ minutos` da linha. Comentários e linhas
+/// com `G53` (coordenada de máquina) não mexem na posição da peça.
+pub fn machine_time(lines: &[String]) -> MachineTime {
+    let word = |l: &str, axis: char| -> Option<f64> {
+        l.split_whitespace()
+            .find_map(|w| w.strip_prefix(axis).and_then(|v| v.parse().ok()))
+    };
+    let (mut x, mut y, mut z, mut a, mut f) = (0.0, 0.0, 0.0, 0.0, 0.0);
+    let mut inverse = false;
+    let mut out = MachineTime::default();
+    for raw in lines {
+        let l = raw.trim();
+        if l.is_empty() || l.starts_with('(') || l.starts_with('%') || l.contains("G53") {
+            continue;
+        }
+        let codigo = l.split('(').next().unwrap_or(l);
+        let tokens: Vec<&str> = codigo.split_whitespace().collect();
+        if tokens.contains(&"G93") {
+            inverse = true;
+        }
+        if tokens.contains(&"G94") {
+            inverse = false;
+        }
+        if tokens.iter().any(|t| *t == "G04" || *t == "G4") {
+            out.dwell_min += word(codigo, 'P').unwrap_or(0.0).max(0.0) / 60.0;
+            continue;
+        }
+        let nx = word(codigo, 'X').unwrap_or(x);
+        let ny = word(codigo, 'Y').unwrap_or(y);
+        let nz = word(codigo, 'Z').unwrap_or(z);
+        let na = word(codigo, 'A').unwrap_or(a);
+        if let Some(nf) = word(codigo, 'F') {
+            f = nf;
+        }
+        let g01 = tokens.iter().any(|t| *t == "G01" || *t == "G1");
+        let g00 = tokens.iter().any(|t| *t == "G00" || *t == "G0");
+        if g01 && f > 0.0 {
+            if inverse {
+                out.feed_min += 1.0 / f;
+            } else {
+                let d = ((nx - x).powi(2) + (ny - y).powi(2) + (nz - z).powi(2) + (na - a).powi(2))
+                    .sqrt();
+                out.feed_min += d / f;
+            }
+        }
+        if g01 || g00 {
+            (x, y, z, a) = (nx, ny, nz, na);
+        }
+    }
+    out
+}
+
 /// X e Y da máquina (mm) de um ponto da bolacha: o ponto na peça desfeito do
 /// giro da mesa. Com a tocha só em X, o Y é zero e o X é o raio.
 pub fn machine_xy(pt: &PathPoint) -> (f32, f32) {

@@ -7,9 +7,9 @@
 use std::f64::consts::PI;
 
 use super::common::{
-    append_torch_disable, append_torch_enable, build_footer, build_header, direction_str,
-    effective_base_diameter, extinguish_arc_deg, f1, f3, fechamento_uniforme_comment,
-    layer_separator, overlap_metrics, py_max, rotary_arc_bounds, Pos,
+    append_torch_disable, append_torch_enable, apply_smart_layers, build_footer, build_header,
+    direction_str, effective_base_diameter, extinguish_arc_deg, f1, f3,
+    fechamento_uniforme_comment, layer_separator, overlap_metrics, py_max, rotary_arc_bounds, Pos,
 };
 use super::GenError;
 use crate::deposit::{solve_feed_factors, PathStep};
@@ -68,7 +68,7 @@ fn build_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let z_layer = z_mag;
     let z_seguranca = z_layer + z_safe_offset;
     let direction = direction_str(p.direcao_soldagem);
-    let taxa_de_deposicao = p.taxa();
+    let taxa_de_deposicao = apply_smart_layers(p, layer_num, p.taxa());
     let bounds = rotary_arc_bounds(p);
     let metrics = overlap_metrics(p, layer_num, Some(current_d), None);
     let passo = metrics.step_over_mm;

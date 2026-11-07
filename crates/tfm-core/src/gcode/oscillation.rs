@@ -692,7 +692,14 @@ fn build_square_segment(p: &Params, layer_num: i64, current_d: f64) -> Vec<Strin
         return vec![SQUARE_GEOM_ERROR.to_string()];
     };
     g.plan_slowdown(p, &fr, false);
-    let taxa_de_deposicao = p.taxa();
+    let taxa_de_deposicao = apply_smart_layers(p, layer_num, p.taxa());
+    // Camada raiz mais lenta: o A solda; o X só herda a velocidade de solda
+    // quando a da oscilação não foi informada.
+    let raiz = apply_smart_layers(p, layer_num, 1.0);
+    g.feed_a *= raiz;
+    if p.velocidade_oscilacao_mm_min == 0.0 {
+        g.feed_x *= raiz;
+    }
     let rotation_sign = fr.rotation_sign;
     let n = g.num_passos_axiais;
     let fx = f1(g.feed_x);
@@ -886,7 +893,14 @@ fn build_square_continuous_segment(p: &Params, layer_num: i64, current_d: f64) -
         return vec![SQUARE_GEOM_ERROR.to_string()];
     };
     g.plan_slowdown(p, &fr, true);
-    let taxa_de_deposicao = p.taxa();
+    let taxa_de_deposicao = apply_smart_layers(p, layer_num, p.taxa());
+    // Camada raiz mais lenta: o A solda; o X só herda a velocidade de solda
+    // quando a da oscilação não foi informada.
+    let raiz = apply_smart_layers(p, layer_num, 1.0);
+    g.feed_a *= raiz;
+    if p.velocidade_oscilacao_mm_min == 0.0 {
+        g.feed_x *= raiz;
+    }
     let rotation_sign = fr.rotation_sign;
     let n = g.num_passos_axiais;
     let stairs = Staircase::new(g.feed_x, g.feed_a, p.osc_test_gran_x, p.osc_test_gran_a);

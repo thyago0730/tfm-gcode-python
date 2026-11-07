@@ -130,7 +130,7 @@ pub fn compute_all(params: Params, cfg: &AppConfig, key: u64) -> ComputeResult {
         validator::gcode_invariants(&lines, &params)
     };
     let estimates = if field_errors.is_valid() {
-        estimates::compute(&params, cfg)
+        estimates::compute_with_program(&params, cfg, Some(&lines))
     } else {
         empty_estimates()
     };

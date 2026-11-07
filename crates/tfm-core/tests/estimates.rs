@@ -11,7 +11,14 @@ use std::f64::consts::PI;
 use std::path::Path;
 
 use tfm_core::config::AppConfig;
-use tfm_core::estimates::{compute, multiperfil_pass_plan, Estimates, PassPlanItem};
+use tfm_core::estimates::{compute_with_program, multiperfil_pass_plan, Estimates, PassPlanItem};
+
+/// A conta de cada operação herdada do Python, sem o programa gerado: é o que
+/// estes testes conferem. Com programa, o tempo é o de máquina do G-code
+/// (`tests/tempo_programa.rs`).
+fn compute(p: &Params, cfg: &AppConfig) -> Estimates {
+    compute_with_program(p, cfg, None)
+}
 use tfm_core::formula::{evaluate_block, formula_locals};
 use tfm_core::gcode::common::overlap_metrics;
 use tfm_core::overlap::Uniformity;
@@ -332,24 +339,32 @@ fn bolacha_espiral_continua_and_limits() {
 fn oscillation_linear_exact_values() {
     let e = compute(&params(Operation::OscilacaoLinear), &bare_config());
     // circ = 50*pi; desloc = 0.2*8 = 1.6; passos/volta = ceil(98.17) = 99
+    // Linear: uma volta inteira em A por passo axial, passo do cordão
+    // 8 × (1 − 40%) = 4,8 mm e ceil(50 ÷ 4,8) = 11 passos. O Python usava o
+    // modelo da quadrada aqui (passo 2,0 e 03:59), 16 vezes acima do programa.
     assert_eq!(e.rotation.text, "1.309");
-    assert_eq!(e.pitch.text, "2.000 (axial)");
-    assert_eq!(e.rotations, "25.00 (passos axiais)");
-    assert_eq!(e.total_angle, "3.64° (passo)");
+    assert_eq!(e.pitch.text, "4.800 (axial)");
+    assert_eq!(e.rotations, "11.00 (passos axiais)");
+    assert_eq!(e.total_angle, "360.00° (passo)");
     let circ = PI * 50.0;
-    let tempo_osc = 10.0 / 120.0;
-    let tempo_rot = (360.0 / 99.0) / ((120.0 / circ) * 360.0);
-    let minutos = 25.0 * ((tempo_osc + tempo_rot) * 99.0);
-    assert_eq!(e.time_hhmm, "03:59");
+    let minutos = 11.0 * (circ / 120.0);
     assert_eq!(e.time_hhmm, hhmm(minutos));
     assert_close(e.time_hours, minutos / 60.0, 1e-9, "time_hours");
     assert_default_costs(&e, circ * 50.0 * 0.16 / 1000.0, minutos / 60.0);
     assert!(!e.rotation.over_limit && !e.pitch.over_limit);
 
-    // Quadrada usa o mesmo tempo de rotação; quadrada contínua zera esse termo
+    // Quadrada: modelo das pernas em X e passos angulares; contínua zera o giro.
+    let tempo_osc = 10.0 / 120.0;
+    let tempo_rot = (360.0 / 99.0) / ((120.0 / circ) * 360.0);
     let q = compute(&params(Operation::OscilacaoQuadrada), &bare_config());
+    assert_eq!(q.pitch.text, "2.000 (axial)");
     assert_eq!(q.time_hhmm, "03:59");
-    assert_close(q.time_hours, e.time_hours, 1e-12, "quadrada = linear");
+    assert_close(
+        q.time_hours,
+        25.0 * ((tempo_osc + tempo_rot) * 99.0) / 60.0,
+        1e-9,
+        "quadrada",
+    );
     let qc = compute(
         &params(Operation::OscilacaoQuadradaContinua),
         &bare_config(),
@@ -630,12 +645,13 @@ fn formulas_are_raw_evaluate_block_output() {
             "{key} deve avaliar"
         );
     }
-    // Com o config real, o po vem da formula e o custo do po tambem
+    // As fórmulas avaliam, mas as padrão (herdadas do Python, de conta de
+    // cilindro) não sobrescrevem o cálculo: só uma expressão alterada manda.
     let kg = e.formulas["powder_mass_kg"].unwrap_or(f64::NAN);
-    assert_eq!(e.costs.powder_kg, kg);
+    assert!(kg.is_finite());
     assert_eq!(
         e.costs.powder_cost,
-        e.formulas["powder_cost_brl"].unwrap_or(f64::NAN)
+        e.costs.powder_kg * p.powder_cost_brl_kg
     );
     assert_eq!(e.costs.currency, "R$");
 }

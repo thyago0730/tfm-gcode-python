@@ -13,9 +13,9 @@
 use std::f64::consts::PI;
 
 use super::common::{
-    append_torch_disable, append_torch_enable, build_footer, build_header, effective_base_diameter,
-    f1, f3, f3s, fechamento_uniforme_comment, overlap_metrics, profile_shape_str, py_max, py_min,
-    py_or, rotary_arc_bounds, Pos,
+    append_torch_disable, append_torch_enable, apply_smart_layers, build_footer, build_header,
+    effective_base_diameter, f1, f3, f3s, fechamento_uniforme_comment, overlap_metrics,
+    profile_shape_str, py_max, py_min, py_or, rotary_arc_bounds, Pos,
 };
 use super::GenError;
 use crate::overlap::uniform_closing;
@@ -298,7 +298,7 @@ fn build_layer(p: &Params, layer_num: i64, current_d: f64) -> Vec<String> {
     let z_seguranca = z_layer + z_safe_offset;
     let is_internal = p.is_internal();
     let rotation_sign = p.rotation_sign();
-    let taxa_de_deposicao = p.taxa();
+    let taxa_de_deposicao = apply_smart_layers(p, layer_num, p.taxa());
     let pitch = py_max(py_or(p.multiperfil_pitch_mm, 0.0), 1e-6);
     let bounds = rotary_arc_bounds(p);
     // Fechamento uniforme: o comprimento vale de borda a borda do material, e

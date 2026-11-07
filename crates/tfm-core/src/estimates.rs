@@ -31,7 +31,7 @@ use std::f64::consts::PI;
 
 use indexmap::IndexMap;
 
-use crate::config::{AppConfig, MachineLimits};
+use crate::config::{AppConfig, MachineLimits, DEFAULT_FORMULAS};
 use crate::deposit::MAX_FEED_FACTOR;
 use crate::formula::{evaluate_block, formula_locals};
 use crate::gcode::bolacha_osc;
@@ -44,6 +44,7 @@ use crate::gcode::oscillation::oscillation_closing;
 use crate::overlap::{uniform_closing, OverlapMetrics, UniformClosing, Uniformity};
 use crate::params::{BolachaTipo, OscillationType, Params, WeldingMode};
 use crate::quality::QualityManager;
+use crate::toolpath::machine_time;
 
 // ---------------------------------------------------------------------------
 // Tipos públicos
@@ -181,6 +182,16 @@ pub struct PassPlanItem {
 /// `machine_cost_brl` e `total_cost_brl` (qualquer número, como o
 /// `isinstance(x, (int, float))` do Python).
 pub fn compute(p: &Params, cfg: &AppConfig) -> Estimates {
+    let lines = crate::validator::can_generate(p)
+        .then(|| crate::gcode::generate(p).ok())
+        .flatten();
+    compute_with_program(p, cfg, lines.as_deref())
+}
+
+/// Estimativas com o tempo de máquina de `lines`, o G-code já gerado para `p`.
+/// Sem programa (parâmetros inválidos ou geração falhou), vale a conta de cada
+/// operação herdada do Python.
+pub fn compute_with_program(p: &Params, cfg: &AppConfig, lines: Option<&[String]>) -> Estimates {
     let shared = Shared::new(p, cfg);
     let mode = match p.welding_mode {
         WeldingMode::Espiral => espiral(p, &shared),
@@ -196,18 +207,37 @@ pub fn compute(p: &Params, cfg: &AppConfig) -> Estimates {
 
     let formulas = evaluate_block(&cfg.formulas.expressions, &formula_locals(p, &cfg.costs));
     let num = |key: &str| formulas.get(key).copied().flatten();
+    // As fórmulas padrão herdadas do Python usam a conta de um cilindro para
+    // tempo, pó e custos, inclusive na chapa, na bolacha e nas oscilações. Elas
+    // só sobrescrevem o cálculo quando o usuário mudou a expressão.
+    let custom = |key: &str| {
+        let padrao = DEFAULT_FORMULAS
+            .iter()
+            .find(|(k, _)| *k == key)
+            .map(|(_, v)| *v);
+        cfg.formulas
+            .expressions
+            .get(key)
+            .is_some_and(|expr| padrao != Some(expr.as_str()))
+    };
+    let num_custom = |key: &str| if custom(key) { num(key) } else { None };
 
     // Override do consumo de pó
     let mut consumo_po_kg = mode.consumo_po_kg;
-    if let Some(kg) = num("powder_mass_kg").filter(|v| *v >= 0.0) {
+    if let Some(kg) = num_custom("powder_mass_kg").filter(|v| *v >= 0.0) {
         consumo_po_kg = kg;
-    } else if let Some(g) = num("powder_mass_g").filter(|v| *v >= 0.0) {
+    } else if let Some(g) = num_custom("powder_mass_g").filter(|v| *v >= 0.0) {
         consumo_po_kg = g / 1000.0;
     }
 
-    // Tempo: o do modo manda; fórmulas só como fallback quando ele é zero
-    let mut time_hhmm = hhmm(mode.total_minutos);
-    let mut tempo_total_horas = mode.total_minutos / 60.0;
+    // Tempo: o de máquina do G-code gerado (movimentos e esperas). Sem
+    // programa, o do modo; fórmulas só como último recurso, quando ele é zero.
+    let total_minutos = lines
+        .filter(|l| !l.is_empty())
+        .map(|l| machine_time(l).total_min())
+        .unwrap_or(mode.total_minutos);
+    let mut time_hhmm = hhmm(total_minutos);
+    let mut tempo_total_horas = total_minutos / 60.0;
     if tempo_total_horas <= 0.0 {
         let taxa_kg_h = if p.taxa_deposicao_g_h > 0.0 {
             Some(p.taxa_deposicao_g_h / 1000.0)
@@ -237,19 +267,20 @@ pub fn compute(p: &Params, cfg: &AppConfig) -> Estimates {
     let consumo_gas_m3_hora = p.vazao_gas * 60.0 / 1000.0;
     let mut custo_gas = consumo_gas_m3_hora * tempo_total_horas * costs.gas_argon_brl_m3;
     let mut custo_consumiveis = custo_po + custo_gas;
-    if let Some(v) = num("powder_cost_brl") {
+    if let Some(v) = num_custom("powder_cost_brl") {
         custo_po = v;
         custo_consumiveis = custo_po + custo_gas;
     }
-    if let Some(v) = num("gas_cost_brl") {
+    if let Some(v) = num_custom("gas_cost_brl") {
         custo_gas = v;
         custo_consumiveis = custo_po + custo_gas;
     }
-    let labor_cost = num("labor_cost_brl").unwrap_or(tempo_total_horas * costs.labor_brl_hour);
+    let labor_cost =
+        num_custom("labor_cost_brl").unwrap_or(tempo_total_horas * costs.labor_brl_hour);
     let machine_cost =
-        num("machine_cost_brl").unwrap_or(tempo_total_horas * costs.machine_brl_hour);
+        num_custom("machine_cost_brl").unwrap_or(tempo_total_horas * costs.machine_brl_hour);
     let custo_operacional = labor_cost + machine_cost;
-    let custo_total = num("total_cost_brl").unwrap_or(custo_consumiveis + custo_operacional);
+    let custo_total = num_custom("total_cost_brl").unwrap_or(custo_consumiveis + custo_operacional);
     let consumo_gas_m3 = consumo_gas_m3_hora * tempo_total_horas;
     let currency = if costs.currency_symbol.is_empty() {
         "$".to_string()
@@ -781,7 +812,17 @@ fn oscilacao(p: &Params, s: &Shared) -> ModeOutcome {
     }
     let tempo_por_passo_angular = tempo_osc_ida_volta + tempo_rotacao_passo;
     let tempo_por_volta = tempo_por_passo_angular * num_passos_angulares_por_volta;
-    let passo_sobreposicao = py_max(comp_osc * (s.sobreposicao / 100.0), 1e-6);
+    // Na linear o programa dá uma volta inteira em A por passo axial, com o
+    // passo do cordão; nas quadradas o passo é o da oscilação.
+    let linear = !matches!(
+        p.oscillation_type,
+        Some(OscillationType::Quadrada) | Some(OscillationType::QuadradaContinua)
+    ) && p.welding_mode != WeldingMode::OscilacaoQuadrada;
+    let passo_sobreposicao = if linear {
+        py_max(s.larg_cordao * (1.0 - s.sobreposicao / 100.0), 1e-6)
+    } else {
+        py_max(comp_osc * (s.sobreposicao / 100.0), 1e-6)
+    };
     let num_passos_axiais = if s.h > 0.0 {
         (s.h / passo_sobreposicao).ceil()
     } else {
@@ -793,6 +834,12 @@ fn oscilacao(p: &Params, s: &Shared) -> ModeOutcome {
         (c.passo, c.aneis as f64)
     } else {
         (passo_sobreposicao, num_passos_axiais)
+    };
+    // Na linear cada passo axial é uma volta inteira em A, sem pernas em X.
+    let tempo_por_volta = if linear {
+        rot_min_por_volta
+    } else {
+        tempo_por_volta
     };
     let tempo_min_total_osc = num_passos_axiais * tempo_por_volta;
     let tempo_leads = if s.taxa > 0.0 {
@@ -815,7 +862,11 @@ fn oscilacao(p: &Params, s: &Shared) -> ModeOutcome {
             over_limit: s.x_travel_over_limit(),
         },
         rotations: format!("{} (passos axiais)", txt2(num_passos_axiais)),
-        total_angle: format!("{}° (passo)", txt2(actual_delta_a_deg)),
+        total_angle: if linear {
+            format!("{}° (passo)", txt2(360.0))
+        } else {
+            format!("{}° (passo)", txt2(actual_delta_a_deg))
+        },
         total_minutos: tempo_min_total * s.num_camadas,
         consumo_po_kg: rotary_powder_kg(s),
     }
