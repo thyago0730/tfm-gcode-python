@@ -37,7 +37,7 @@ const RESULT_LABELS: [&str; 9] = [
     "Tempo Total (hh:mm):",
     "Largura Efetiva (mm):",
     "Passo Real (mm):",
-    "Cobertura Estimada:",
+    "Sobreposição obtida:",
     "Uniformidade:",
 ];
 
@@ -559,7 +559,7 @@ mod tests {
                 ("Tempo Total (hh:mm):", "01:05"),
                 ("Largura Efetiva (mm):", "6.00"),
                 ("Passo Real (mm):", "2.50"),
-                ("Cobertura Estimada:", "100.0% | curva 0.10 mm"),
+                ("Sobreposição obtida:", "100.0% | curva 0.10 mm"),
                 ("Uniformidade:", "Atencao | var 12.0%"),
             ]
         );

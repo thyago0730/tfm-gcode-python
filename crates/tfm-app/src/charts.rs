@@ -1370,7 +1370,7 @@ fn draw_schematic(
     let items = [
         ("Solda".to_string(), palette.layer_color(0)),
         ("Sobreposicao".to_string(), OVERLAP_COLOR),
-        (format!("Diluicao {:.1}%", geo.dilution_pct), dilution),
+        (format!("Indice dil. {:.1}", geo.dilution_pct), dilution),
     ];
     for (label, color) in items {
         let swatch = Rect::from_center_size(pos2(x + 6.0, legend_y), vec2(12.0, 7.0));

@@ -144,8 +144,7 @@ mod tip {
     pub const NOTAS: &str = "Observações livres gravadas no procedimento.";
     pub const PADRAO: &str = "Restaura os valores padrão do modo atual.";
     pub const HEAT_INPUT: &str = "Aporte térmico: tensão × corrente × eficiência ÷ velocidade. Fora de 0,1 a 3,0 kJ/mm fica em vermelho.";
-    pub const DILUICAO: &str =
-        "Diluição estimada pela corrente e pela taxa de pó. Fora de 2 a 15 % fica em vermelho.";
+    pub const DILUICAO: &str = "Índice de diluição: indicador relativo herdado do Python (2,5 × corrente ÷ pó em g/min − 2), sem base física. Serve para comparar ajustes entre si, não é a diluição medida; no PTA ela fica em 6 a 10%, e só a macrografia do corpo de prova dá o valor real.";
 }
 
 /// Listas e valores calculados antes de emprestar `app.ui` de forma mutável.
@@ -972,7 +971,7 @@ fn tab_processo(f: &mut Form, ctx: &Context, cfg: &AppConfig, ui: &mut Ui) {
     });
 }
 
-/// Heat Input (kJ/mm) e Diluição Est. (%) do último resultado, com as mesmas
+/// Heat Input (kJ/mm) e índice de diluição do último resultado, com as mesmas
 /// faixas de alerta do Python (0,1 a 3,0 kJ/mm; 2 a 15 %).
 fn process_kpis(ctx: &Context, ui: &mut Ui) {
     let palette = &ctx.palette;
@@ -983,27 +982,23 @@ fn process_kpis(ctx: &Context, ui: &mut Ui) {
             } else {
                 palette.success
             };
-            let dilution_color = if !(2.0..=15.0).contains(&dilution) {
-                palette.danger
-            } else {
-                palette.success
-            };
             kpi(
                 ui,
                 "Heat Input:",
                 &format!("{heat:.2} kJ/mm"),
                 Some(heat_color),
             );
+            // Indicador relativo, sem base física: não vira % nem cor.
             kpi(
                 ui,
-                "Diluição Est.:",
-                &format!("{dilution:.1} %"),
-                Some(dilution_color),
+                "Índice de diluição:",
+                &format!("{dilution:.1} (relativo)"),
+                None,
             );
         }
         None => {
             kpi(ui, "Heat Input:", "- kJ/mm", None);
-            kpi(ui, "Diluição Est.:", "- %", None);
+            kpi(ui, "Índice de diluição:", "-", None);
         }
     }
     if let Some((local, alerts)) = &ctx.local {
