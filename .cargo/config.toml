@@ -1,0 +1,5 @@
+# Runtime do Visual C++ embutido no exe (CRT estático): o app roda em qualquer
+# Windows sem o "Visual C++ Redistributable" instalado. Sem isso, máquinas sem
+# o pacote mostram "VCRUNTIME140.dll não foi encontrado".
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
