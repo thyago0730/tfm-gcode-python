@@ -362,6 +362,22 @@ pub fn checklist_passed(items: &[ChecklistItem]) -> bool {
     items.iter().all(ChecklistItem::is_ok)
 }
 
+/// Parênteses de comentário sem aninhar e todos fechados.
+fn comments_are_flat(line: &str) -> bool {
+    let mut depth = 0i32;
+    for c in line.chars() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            _ => {}
+        }
+        if !(0..=1).contains(&depth) {
+            return false;
+        }
+    }
+    depth == 0
+}
+
 /// Porta de `validate_gcode_invariants`: confere o programa gerado contra os
 /// invariantes de processo. Devolve as mensagens (vazio = tudo certo):
 ///
@@ -371,7 +387,9 @@ pub fn checklist_passed(items: &[ChecklistItem]) -> bool {
 /// * `"Rotação A invertida: {prev:.3} -> {a:.3} ({linha anterior} -> {linha})"`
 ///   quando, com a tocha ligada, o eixo A recua contra `sentido_rotacao`
 ///   (tolerância 1e-6; no máximo 3 mensagens). `M101`/`M102` zeram a
-///   referência; linhas vazias e comentários `(...)` são ignorados.
+///   referência; linhas vazias e comentários `(...)` são ignorados;
+/// * `"Comentário aninhado ou sem fechar..."` para linhas que o Mach3 recusa
+///   (no máximo 3 mensagens).
 pub fn gcode_invariants(lines: &[String], p: &Params) -> Vec<String> {
     if lines.is_empty() {
         return vec![EMPTY_MSG.to_string()];
@@ -384,8 +402,18 @@ pub fn gcode_invariants(lines: &[String], p: &Params) -> Vec<String> {
     let mut a_violations = 0u32;
     let mut missing_enable_weld = 0u32;
 
+    let mut nested_comments = 0u32;
     for raw in lines {
         let line = raw.trim();
+        // O Mach3 para com comentário dentro de comentário ou sem fechar.
+        if !comments_are_flat(line) {
+            nested_comments += 1;
+            if nested_comments <= 3 {
+                issues.push(format!(
+                    "Comentário aninhado ou sem fechar (o Mach3 recusa): {line}"
+                ));
+            }
+        }
         if line.is_empty() || line.starts_with('(') {
             continue;
         }

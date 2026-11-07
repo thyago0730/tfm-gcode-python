@@ -682,3 +682,70 @@ fn ring_change_does_not_weave() {
         }
     }
 }
+
+/// O Mach3 recusa comentário dentro de comentário ("Nested comment found") e
+/// parêntese sem fechar. Nenhuma linha gerada pode ter isso, em nenhuma
+/// operação nem combinação de opções, e o verificador de G-code acusa.
+#[test]
+fn no_line_has_nested_or_open_comments() {
+    use tfm_core::params::BolachaOscSentido;
+    let ok = |l: &str| {
+        let mut depth = 0i32;
+        for c in l.chars() {
+            match c {
+                '(' => depth += 1,
+                ')' => depth -= 1,
+                _ => {}
+            }
+            if !(0..=1).contains(&depth) {
+                return false;
+            }
+        }
+        depth == 0
+    };
+    let mut casos: Vec<Params> = Operation::ALL
+        .iter()
+        .map(|op| {
+            let mut p = Params::default();
+            p.apply_operation(*op);
+            p
+        })
+        .collect();
+    for eixo in [BolachaOscEixo::X, BolachaOscEixo::Y] {
+        for sentido in [BolachaOscSentido::ParaFora, BolachaOscSentido::ParaDentro] {
+            for forma in FORMAS {
+                for tipo in [BolachaTipo::EspiralContinua, BolachaTipo::Aneis] {
+                    let mut p = bolacha(forma);
+                    p.bolacha_osc_eixo = eixo;
+                    p.bolacha_osc_sentido = sentido;
+                    p.bolacha_tipo = tipo;
+                    p.bolacha_osc_espera_s = 0.2;
+                    casos.push(p);
+                }
+            }
+        }
+    }
+    for mut p in casos {
+        for g93 in [false, true] {
+            p.tempo_inverso_g93 = g93;
+            let lines = generate(&p).expect("gera");
+            for l in &lines {
+                assert!(
+                    ok(l),
+                    "{:?} g93={g93}: comentário aninhado: {l}",
+                    p.welding_mode
+                );
+            }
+            assert!(
+                gcode_invariants(&lines, &p).is_empty(),
+                "{:?}",
+                gcode_invariants(&lines, &p)
+            );
+        }
+    }
+    // O verificador acusa uma linha assim.
+    let mut lines = generate(&bolacha(BolachaOscForma::Triangular)).expect("gera");
+    lines.insert(5, "(TEXTO (DENTRO) DE OUTRO)".to_string());
+    let avisos = gcode_invariants(&lines, &bolacha(BolachaOscForma::Triangular));
+    assert!(avisos.iter().any(|a| a.contains("aninhado")), "{avisos:?}");
+}

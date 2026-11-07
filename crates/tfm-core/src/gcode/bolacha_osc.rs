@@ -390,8 +390,8 @@ fn nome_do_primeiro(eixo: BolachaOscEixo, s: BolachaOscSentido) -> &'static str 
     match (eixo, s) {
         (BolachaOscEixo::X, BolachaOscSentido::ParaFora) => "para fora",
         (BolachaOscEixo::X, BolachaOscSentido::ParaDentro) => "para dentro",
-        (BolachaOscEixo::Y, BolachaOscSentido::ParaFora) => "para fora (Y positivo)",
-        (BolachaOscEixo::Y, BolachaOscSentido::ParaDentro) => "para dentro (Y negativo)",
+        (BolachaOscEixo::Y, BolachaOscSentido::ParaFora) => "para fora, Y positivo",
+        (BolachaOscEixo::Y, BolachaOscSentido::ParaDentro) => "para dentro, Y negativo",
     }
 }
 
