@@ -411,6 +411,11 @@ pub struct Params {
     /// existia no Python.
     #[serde(deserialize_with = "lenient_bool")]
     pub defasar_camadas: bool,
+    /// Gera o programa em G93 (tempo inverso): cada `G01` traz `F = 1 ÷
+    /// minutos` da linha, e a velocidade não depende do "raio do eixo A"
+    /// configurado no Mach3. Não existia no Python.
+    #[serde(deserialize_with = "lenient_bool")]
+    pub tempo_inverso_g93: bool,
     #[serde(deserialize_with = "lenient_bool")]
     pub flat_single_direction: bool,
     pub flat_orientation: FlatOrientation,
@@ -565,6 +570,7 @@ impl Default for Params {
             fechamento_uniforme: false,
             compensar_rotacao: false,
             defasar_camadas: false,
+            tempo_inverso_g93: false,
             flat_single_direction: false,
             flat_orientation: FlatOrientation::X,
             operacao_interna: false,

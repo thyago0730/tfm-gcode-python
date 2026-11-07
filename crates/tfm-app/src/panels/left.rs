@@ -87,6 +87,7 @@ mod tip {
         Na Espiral acelera onde o material acumula, com menos sobremetal, pó e tempo. Nas quadradas, \
         junto com o fechamento uniforme, desacelera nas pontas, onde falta material, gastando mais \
         pó e tempo. A rotação muda até 2,5 vezes: confira se ela continua dentro da EPS.";
+    pub const TEMPO_INVERSO: &str = "Gera o programa em G93: cada linha traz o próprio tempo (F = 1 ÷ minutos). A velocidade sobre a peça fica certa qualquer que seja o raio do eixo A configurado no Mach3. Desligado, o F vale em G94 e supõe o Mach3 lendo os graus de A como milímetros.";
     pub const DEFASAR_CAMADAS: &str = "Cada camada parte em um ângulo diferente (360° ÷ nº de         camadas), o que desloca os passes em X sem mudar o passo nem o X do programa. Os cumes de         uma camada caem nos vales da anterior, e o relevo entre passes não soma. Com uma camada         não muda nada.";
     pub const BOLACHA_OSCILAR: &str = "O raio (X) vai e volta em torno da trajetória enquanto a \
         mesa gira. O passo entre voltas passa a usar a largura do cordão mais o comprimento da \
@@ -474,6 +475,12 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                 "Recuar tocha ao ligar",
                 "torch_retract_on_ignite",
                 tip::RECUAR,
+            );
+            f.flag(
+                ui,
+                "Tempo inverso (G93)",
+                "tempo_inverso_g93",
+                tip::TEMPO_INVERSO,
             );
             if matches!(op, Operation::Espiral | Operation::EspiralMultiperfil) {
                 f.flag(

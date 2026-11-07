@@ -442,6 +442,8 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
     };
 
     let mut machine = Machine::default();
+    // Em G93 o F é `1 ÷ minutos` da linha; a velocidade vem da distância.
+    let mut inverse = false;
     let mut torch_on = false;
     let mut extinguishing = false;
     let mut layer = 0usize;
@@ -477,6 +479,8 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
             match word {
                 "G0" | "G00" => motion = Some(true),
                 "G1" | "G01" => motion = Some(false),
+                "G93" => inverse = true,
+                "G94" => inverse = false,
                 _ => {
                     let mut chars = word.chars();
                     let target = match chars.next() {
@@ -495,10 +499,21 @@ pub fn build_toolpath(lines: &[String], p: &Params) -> Toolpath {
         }
         let Some(rapid) = motion else { continue };
         extinguishing = extinguishing && !rapid;
+        let feed = if inverse && !rapid {
+            let m = machine;
+            let d = ((m.x - prev.x).powi(2)
+                + (m.y - prev.y).powi(2)
+                + (m.z - prev.z).powi(2)
+                + (m.a - prev.a).powi(2))
+            .sqrt();
+            d * m.f
+        } else {
+            machine.f
+        };
         let frame = Frame {
             line_idx,
             extinguishing,
-            feed: machine.f,
+            feed,
             torch_on,
             rapid,
             layer,

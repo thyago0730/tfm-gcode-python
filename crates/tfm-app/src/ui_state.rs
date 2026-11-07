@@ -245,6 +245,7 @@ const FLAG_FIELDS: &[FlagField] = &[
     flag!("fechamento_uniforme", fechamento_uniforme),
     flag!("compensar_rotacao", compensar_rotacao),
     flag!("defasar_camadas", defasar_camadas),
+    flag!("tempo_inverso_g93", tempo_inverso_g93),
     flag!("flat_single_direction", flat_single_direction),
     flag!("operacao_interna", operacao_interna),
     flag!("multiperfil_point_by_point", multiperfil_point_by_point),

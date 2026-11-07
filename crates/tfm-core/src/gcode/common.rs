@@ -584,6 +584,91 @@ pub fn extinguish_arc_deg(p: &Params, path_speed_mm_min: f64, radius: f64) -> f6
     (extra_mm / py_max(radius, 1e-6)).to_degrees()
 }
 
+/// Converte um programa em G94 para G93 (tempo inverso). A distância de cada
+/// `G01` é a que o Mach3 lê em G94 (X, Y, Z em mm e A em graus, juntos), com o
+/// F modal; o F novo é `1 ÷ minutos` da linha, escrito em todo `G01`. O
+/// cabeçalho `G94` vira `G93` e o programa volta a `G94` antes do `M30`.
+/// Comentários, `G00`, `G04` e linhas com `G53` ficam como estão.
+pub fn to_inverse_time(lines: &[String]) -> Vec<String> {
+    /// Linha sem deslocamento: 1 ms, só para o G01 ter F.
+    const F_SEM_MOVIMENTO: f64 = 60_000.0;
+    let word = |l: &str, axis: char| -> Option<f64> {
+        l.split_whitespace()
+            .find_map(|w| w.strip_prefix(axis).and_then(|v| v.parse().ok()))
+    };
+    let (mut x, mut y, mut z, mut a, mut f) = (0.0, 0.0, 0.0, 0.0, 0.0_f64);
+    let mut out = Vec::with_capacity(lines.len() + 4);
+    for raw in lines {
+        let l = raw.trim();
+        if l.is_empty() || l.starts_with('(') || l.starts_with('%') || l.contains("G53") {
+            out.push(raw.clone());
+            continue;
+        }
+        if l.starts_with("M30") {
+            out.push("G94 (VOLTA AO AVANCO POR MINUTO)".to_string());
+            out.push(raw.clone());
+            continue;
+        }
+        let (codigo, comentario) = match l.find('(') {
+            Some(k) => (&l[..k], &l[k..]),
+            None => (l, ""),
+        };
+        let tokens: Vec<&str> = codigo.split_whitespace().collect();
+        if tokens.contains(&"G94") {
+            let novo: Vec<&str> = tokens
+                .iter()
+                .map(|t| if *t == "G94" { "G93" } else { t })
+                .collect();
+            out.push(novo.join(" "));
+            out.push("(G93: F EM TEMPO INVERSO, 1 / MINUTOS DE CADA LINHA)".to_string());
+            continue;
+        }
+        let nx = word(codigo, 'X').unwrap_or(x);
+        let ny = word(codigo, 'Y').unwrap_or(y);
+        let nz = word(codigo, 'Z').unwrap_or(z);
+        let na = word(codigo, 'A').unwrap_or(a);
+        if let Some(nf) = word(codigo, 'F') {
+            f = nf;
+        }
+        let g01 = tokens.iter().any(|t| *t == "G01" || *t == "G1");
+        let g00 = tokens.iter().any(|t| *t == "G00" || *t == "G0");
+        if g01 && f > 0.0 {
+            let d =
+                ((nx - x).powi(2) + (ny - y).powi(2) + (nz - z).powi(2) + (na - a).powi(2)).sqrt();
+            let inverso = if d > 1e-9 { f / d } else { F_SEM_MOVIMENTO };
+            let mut novo: Vec<String> = tokens
+                .iter()
+                .filter(|t| !t.starts_with('F'))
+                .map(|t| t.to_string())
+                .collect();
+            novo.push(format!("F{}", f_inverso(inverso)));
+            let mut linha = novo.join(" ");
+            if !comentario.is_empty() {
+                linha.push(' ');
+                linha.push_str(comentario);
+            }
+            out.push(linha);
+        } else {
+            out.push(raw.clone());
+        }
+        if g01 || g00 {
+            (x, y, z, a) = (nx, ny, nz, na);
+        }
+    }
+    out
+}
+
+/// F de tempo inverso com 6 algarismos significativos, sem zeros à direita.
+fn f_inverso(v: f64) -> String {
+    let casas = (5 - v.abs().log10().floor() as i32).clamp(0, 9) as usize;
+    let s = format!("{v:.casas$}");
+    if s.contains('.') {
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    } else {
+        s
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! Cobre os auxiliares que o modo Espiral não exercita (outros modos os

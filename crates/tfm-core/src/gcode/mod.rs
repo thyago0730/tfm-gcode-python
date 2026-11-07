@@ -45,7 +45,7 @@ pub fn generate_with_timestamp(p: &Params, timestamp: &str) -> Result<Vec<String
     }
     let mut p = p.clone();
     p.normalize();
-    match p.welding_mode {
+    let lines = match p.welding_mode {
         WeldingMode::Espiral => spiral::generate(&p, timestamp),
         WeldingMode::EspiralMultiperfil => multiperfil::generate(&p, timestamp),
         WeldingMode::Bolacha => bolacha::generate(&p, timestamp),
@@ -59,7 +59,12 @@ pub fn generate_with_timestamp(p: &Params, timestamp: &str) -> Result<Vec<String
                 oscillation::generate_square_continuous(&p, timestamp)
             }
         },
-    }
+    }?;
+    Ok(if p.tempo_inverso_g93 {
+        common::to_inverse_time(&lines)
+    } else {
+        lines
+    })
 }
 
 /// Versão impressa no cabeçalho: `app_version` dos parâmetros ou, ausente, a
