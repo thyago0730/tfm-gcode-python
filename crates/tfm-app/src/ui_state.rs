@@ -579,6 +579,8 @@ impl UiState {
                 }
             }
             p.powder_name = name;
+            // A Bolacha gira até o limite de rpm do perfil da máquina.
+            p.limite_rpm_placa = cfg.active_limits().max_rpm_chuck;
         }
 
         // Multiperfil: o número de camadas vem da altura do perfil.
@@ -755,6 +757,7 @@ mod tests {
             powder_name: got.powder_name.clone(),
             taxa_de_deposicao: got.taxa_de_deposicao,
             velocidade_a_mm_min: got.velocidade_a_mm_min,
+            limite_rpm_placa: got.limite_rpm_placa,
             ..Params::default()
         };
         assert_eq!(got, expected);
@@ -984,6 +987,14 @@ mod tests {
 
         s.powder_name.clear();
         assert_eq!(s.to_params(&cfg).powder_name, cfg.active_powder);
+    }
+
+    /// O teto de rpm da Bolacha vem do perfil da máquina.
+    #[test]
+    fn plate_rpm_limit_comes_from_the_machine_profile() {
+        let cfg = cfg();
+        let p = UiState::default().to_params(&cfg);
+        assert_eq!(p.limite_rpm_placa, cfg.active_limits().max_rpm_chuck);
     }
 
     /// Densidade e rendimento: os do pó cadastrado; sem eles, a densidade

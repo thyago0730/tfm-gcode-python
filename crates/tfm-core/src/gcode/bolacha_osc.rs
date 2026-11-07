@@ -23,7 +23,7 @@
 //! * **Fase entre camadas**: cada camada começa a onda mais adiante, para os
 //!   picos não empilharem.
 
-use std::f64::consts::{PI, TAU};
+use std::f64::consts::TAU;
 
 use super::common::{
     append_torch_disable, append_torch_enable, apply_smart_layers, f1, f3, layer_separator, py_max,
@@ -439,11 +439,10 @@ fn nome_do_primeiro(eixo: BolachaOscEixo, s: BolachaOscSentido) -> &'static str 
     }
 }
 
-/// Avanço angular (graus/min) que mantém a velocidade tangencial no raio `x`.
-fn angular_feed(taxa: f64, x: f64) -> f64 {
-    let circ = 2.0 * PI * py_max(x, 2.0);
-    let rpm = if circ > 0.0 { taxa / circ } else { 1.0 };
-    py_min(rpm, 20.0) * 360.0
+/// Avanço angular (graus/min) que mantém a velocidade tangencial no raio `x`,
+/// com a rotação até `limite_rpm`.
+fn angular_feed(taxa: f64, x: f64, limite_rpm: f64) -> f64 {
+    super::bolacha::angular_feed(taxa, x, limite_rpm)
 }
 
 /// `G00` que leva a tocha ao início da onda: X, Y quando a onda é em Y, e A.
@@ -557,7 +556,7 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
                         p,
                         Some(&Pos::xa(em.ultimo.0, em.cauda.1)),
                         Some(&Pos::xa(em.ultimo.0, em.ultimo.1)),
-                        Some(angular_feed(taxa, x_pos)),
+                        Some(angular_feed(taxa, x_pos, p.limite_rpm_placa)),
                         Some(taxa),
                         Some(py_max(x_pos, 1e-6)),
                     );
@@ -586,7 +585,7 @@ pub fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
         p,
         Some(&Pos::xa(em.ultimo.0, em.cauda.1)),
         Some(&Pos::xa(em.ultimo.0, em.ultimo.1)),
-        Some(angular_feed(taxa, em.ultimo.0)),
+        Some(angular_feed(taxa, em.ultimo.0, p.limite_rpm_placa)),
         Some(taxa),
         Some(py_max(em.ultimo.0, 1e-6)),
     );

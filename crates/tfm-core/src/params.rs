@@ -416,6 +416,10 @@ pub struct Params {
     /// configurado no Mach3. Não existia no Python.
     #[serde(deserialize_with = "lenient_bool")]
     pub tempo_inverso_g93: bool,
+    /// Teto da rotação da placa na Bolacha (rpm), perto do centro. Padrão 20,
+    /// o fixo do Python; a tela usa o `max_rpm_chuck` do perfil da máquina.
+    #[serde(deserialize_with = "lenient_f64")]
+    pub limite_rpm_placa: f64,
     #[serde(deserialize_with = "lenient_bool")]
     pub flat_single_direction: bool,
     pub flat_orientation: FlatOrientation,
@@ -571,6 +575,7 @@ impl Default for Params {
             compensar_rotacao: false,
             defasar_camadas: false,
             tempo_inverso_g93: false,
+            limite_rpm_placa: 20.0,
             flat_single_direction: false,
             flat_orientation: FlatOrientation::X,
             operacao_interna: false,

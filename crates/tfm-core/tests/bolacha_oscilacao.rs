@@ -740,3 +740,35 @@ fn the_axis_defaults_to_x_and_old_procedures_load() {
     let back: Params = serde_json::from_str(&json).expect("relê");
     assert_eq!(back.bolacha_osc_eixo, BolachaOscEixo::Y);
 }
+
+/// A rotação da placa na Bolacha vai até o limite dos parâmetros (o da máquina
+/// na tela), não mais até 20 rpm fixos. Padrão 20, como o Python.
+#[test]
+fn bolacha_rpm_cap_follows_the_param_limit() {
+    use tfm_core::toolpath::plate_rpm;
+    let max_rpm = |p: &Params| {
+        let t = build_toolpath(&tfm_core::gcode::generate(p).expect("gera"), p);
+        let pts: Vec<_> = t.points().cloned().collect();
+        pts.windows(2)
+            .filter_map(|w| plate_rpm(&w[0], &w[1], p.welding_mode))
+            .fold(0.0_f32, f32::max)
+    };
+    // Sem oscilação: na oscilação as linhas da onda levam F em mm/min ao longo
+    // do caminho e não passam pelo teto.
+    let oscilar = false;
+    {
+        let mut p = Params::default();
+        p.apply_operation(Operation::Bolacha);
+        p.velocidade_de_deposicao = 3000.0;
+        p.taxa_de_deposicao = Some(3000.0);
+        assert_eq!(p.limite_rpm_placa, 20.0);
+        let a = max_rpm(&p);
+        assert!(a <= 20.0 * 1.02, "oscilar {oscilar}: {a} rpm com teto 20");
+        p.limite_rpm_placa = 100.0;
+        let b = max_rpm(&p);
+        assert!(
+            b > 25.0 && b <= 100.0 * 1.02,
+            "oscilar {oscilar}: {b} rpm com teto 100"
+        );
+    }
+}

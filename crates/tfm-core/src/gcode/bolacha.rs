@@ -41,17 +41,26 @@ pub fn generate(p: &Params, timestamp: &str) -> Result<Vec<String>, GenError> {
 }
 
 /// Avanço angular (graus/min) que mantém a velocidade tangencial no raio `x_pos`:
-/// `rpm = min(taxa / (2π·max(x, 2.0)), 20.0)`, devolvendo `rpm * 360`.
+/// `rpm = min(taxa / (2π·max(x, 2.0)), limite)` (o Python fixava 20 rpm), devolvendo `rpm * 360`.
 /// Mantém a guarda `if current_circ > 0 else 1.0` do Python.
-fn angular_feed(taxa_de_deposicao: f64, x_pos: f64) -> f64 {
+pub(crate) fn angular_feed(taxa_de_deposicao: f64, x_pos: f64, limite_rpm: f64) -> f64 {
     let current_circ = 2.0 * PI * py_max(x_pos, 2.0);
     let rpm = if current_circ > 0.0 {
         taxa_de_deposicao / current_circ
     } else {
         1.0
     };
-    let rpm = py_min(rpm, 20.0);
+    let rpm = py_min(rpm, rpm_cap(limite_rpm));
     rpm * 360.0
+}
+
+/// Limite de rpm válido: o pedido, ou 20 quando inválido.
+pub(crate) fn rpm_cap(limite: f64) -> f64 {
+    if limite.is_finite() && limite > 0.0 {
+        limite
+    } else {
+        20.0
+    }
 }
 
 /// `_build_bolacha_segment`: uma camada da bolacha.
@@ -148,7 +157,7 @@ fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
                 }
 
                 // Uma volta completa (360°) com X constante.
-                feed_angular = angular_feed(taxa_de_deposicao, x_pos);
+                feed_angular = angular_feed(taxa_de_deposicao, x_pos, p.limite_rpm_placa);
                 let target_a_360 = current_a_total + (rotation_sign * 360.0);
                 seg.push(format!("G01 F{} A{}", f1(feed_angular), f3(target_a_360)));
                 // O Python grava aqui `last_weld_start/end = {X: x_pos, A: ..}`, mas
@@ -221,7 +230,7 @@ fn build_segment(p: &Params, layer_num: i64) -> Vec<String> {
                 let x_pos = clamp_r(x_pos);
 
                 // O avanço angular depende do raio local (velocidade tangencial).
-                feed_angular = angular_feed(taxa_de_deposicao, x_pos);
+                feed_angular = angular_feed(taxa_de_deposicao, x_pos, p.limite_rpm_placa);
 
                 let a_pos = current_a_total + (rotation_sign * DEG_PER_STEP);
                 seg.push(format!(
