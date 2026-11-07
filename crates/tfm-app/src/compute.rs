@@ -108,6 +108,7 @@ pub fn empty_estimates() -> Estimates {
         formulas: IndexMap::new(),
         heat_input_kj_mm: 0.0,
         dilution_pct: 0.0,
+        espessura_balanco_mm: None,
     }
 }
 

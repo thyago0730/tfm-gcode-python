@@ -87,6 +87,7 @@ mod tip {
         Na Espiral acelera onde o material acumula, com menos sobremetal, pó e tempo. Nas quadradas, \
         junto com o fechamento uniforme, desacelera nas pontas, onde falta material, gastando mais \
         pó e tempo. A rotação muda até 2,5 vezes: confira se ela continua dentro da EPS.";
+    pub const ESPESSURA_BALANCO: &str = "Espessura que a taxa de deposição faz: pó depositado no tempo de arco ÷ (densidade × área revestida × camadas). Fica vermelha quando difere mais de 15% da pedida.";
     pub const TEMPO_INVERSO: &str = "Gera o programa em G93: cada linha traz o próprio tempo (F = 1 ÷ minutos). A velocidade sobre a peça fica certa qualquer que seja o raio do eixo A configurado no Mach3. Desligado, o F vale em G94 e supõe o Mach3 lendo os graus de A como milímetros.";
     pub const DEFASAR_CAMADAS: &str = "Cada camada parte em um ângulo diferente (360° ÷ nº de         camadas), o que desloca os passes em X sem mudar o passo nem o X do programa. Os cumes de         uma camada caem nos vales da anterior, e o relevo entre passes não soma. Com uma camada         não muda nada.";
     pub const BOLACHA_OSCILAR: &str = "O raio (X) vai e volta em torno da trajetória enquanto a \
@@ -152,6 +153,8 @@ struct Context {
     palette: Palette,
     /// `(heat input kJ/mm, diluição %)` do último resultado válido.
     kpis: Option<(f64, f64)>,
+    /// `(espessura pedida, espessura pelo balanço de massa)` em mm.
+    espessura: Option<(f64, f64)>,
     /// Aporte térmico local do último resultado válido e os avisos dele contra
     /// a EPS escolhida.
     local: Option<(LocalProcess, Vec<String>)>,
@@ -170,6 +173,15 @@ pub fn show_left(app: &mut TfmApp, ui: &mut Ui) {
             .as_ref()
             .filter(|r| r.field_errors.is_valid())
             .map(|r| (r.estimates.heat_input_kj_mm, r.estimates.dilution_pct)),
+        espessura: app
+            .result
+            .as_ref()
+            .filter(|r| r.field_errors.is_valid())
+            .and_then(|r| {
+                r.estimates
+                    .espessura_balanco_mm
+                    .map(|b| (r.params.espessura_camada, b))
+            }),
         local: app
             .result
             .as_ref()
@@ -1009,7 +1021,27 @@ fn process_kpis(ctx: &Context, ui: &mut Ui) {
             ui.label(RichText::new(alert).small().color(palette.danger));
         }
     }
+    if let Some((pedida, balanco)) = ctx.espessura {
+        let alerta = tfm_core::estimates::thickness_balance_alert(pedida, balanco);
+        let color = if alerta.is_some() {
+            palette.danger
+        } else {
+            palette.success
+        };
+        kpi(
+            ui,
+            "Espessura (massa):",
+            &format!("{balanco:.2} mm"),
+            Some(color),
+        );
+        if let Some(alerta) = alerta {
+            ui.label(RichText::new(alerta).small().color(palette.danger));
+        }
+    }
     ui.weak(RichText::new(tip::HEAT_INPUT).small());
+    if ctx.espessura.is_some() {
+        ui.weak(RichText::new(tip::ESPESSURA_BALANCO).small());
+    }
     ui.weak(RichText::new(tip::DILUICAO).small());
 }
 

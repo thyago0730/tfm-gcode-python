@@ -142,6 +142,25 @@ pub struct Estimates {
     pub heat_input_kj_mm: f64,
     /// `QualityManager::estimate_dilution(corrente, taxa_deposicao_g_h / 60, velocidade)`.
     pub dilution_pct: f64,
+    /// Espessura que a taxa de deposição faz (mm): pó depositado no tempo de
+    /// arco ÷ (densidade × área revestida × camadas). `None` sem taxa ou sem
+    /// espessura pedida. Não existia no Python.
+    pub espessura_balanco_mm: Option<f64>,
+}
+
+/// Aviso quando a espessura pelo balanço de massa difere mais de 15% da pedida:
+/// o Z sobe pela pedida, e o afastamento da tocha muda a cada camada.
+pub fn thickness_balance_alert(pedida_mm: f64, balanco_mm: f64) -> Option<String> {
+    if !(pedida_mm > 0.0 && balanco_mm.is_finite()) {
+        return None;
+    }
+    let desvio = (balanco_mm - pedida_mm) / pedida_mm;
+    (desvio.abs() > 0.15).then(|| {
+        format!(
+            "A taxa de deposição faz {balanco_mm:.2} mm por camada, contra {pedida_mm:.2} mm pedidos ({:+.0}%). O Z sobe pela pedida: ajuste a espessura, a taxa ou a velocidade.",
+            desvio * 100.0
+        )
+    })
 }
 
 /// Uma camada do plano de passes do multiperfil
@@ -223,6 +242,7 @@ pub fn compute_with_program(p: &Params, cfg: &AppConfig, lines: Option<&[String]
     let num_custom = |key: &str| if custom(key) { num(key) } else { None };
 
     // Override do consumo de pó
+    let espessura_balanco_mm = thickness_balance(p, &shared, &mode, lines);
     let mut consumo_po_kg = mode.consumo_po_kg;
     if let Some(kg) = num_custom("powder_mass_kg").filter(|v| *v >= 0.0) {
         consumo_po_kg = kg;
@@ -320,7 +340,31 @@ pub fn compute_with_program(p: &Params, cfg: &AppConfig, lines: Option<&[String]
             p.taxa_deposicao_g_h / 60.0,
             p.velocidade_de_deposicao,
         ),
+        espessura_balanco_mm,
     }
+}
+
+/// Espessura pelo balanço de massa (mm). A área revestida × camadas sai do pó
+/// físico da operação (que é área × espessura × densidade ÷ rendimento), e o
+/// tempo de arco, dos `G01` do programa (sem ele, da conta da operação).
+fn thickness_balance(
+    p: &Params,
+    s: &Shared,
+    mode: &ModeOutcome,
+    lines: Option<&[String]>,
+) -> Option<f64> {
+    let taxa_g_min = p.taxa_deposicao_g_h / 60.0;
+    if !(taxa_g_min > 0.0 && s.espessura > 0.0 && mode.consumo_po_kg > 0.0) {
+        return None;
+    }
+    let volume_mm3 = mode.consumo_po_kg * 1e6 * (s.rendimento / 100.0) / s.densidade;
+    let area_camadas = volume_mm3 / s.espessura;
+    let arco_min = lines
+        .filter(|l| !l.is_empty())
+        .map(|l| machine_time(l).feed_min)
+        .unwrap_or(mode.total_minutos);
+    let mm = taxa_g_min * arco_min / (s.densidade / 1000.0 * area_camadas);
+    (mm.is_finite() && mm > 0.0).then_some(mm)
 }
 
 /// Porta de `_get_multiperfil_profile_pass_plan`: uma entrada por camada do
