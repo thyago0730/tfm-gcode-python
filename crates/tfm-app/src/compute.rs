@@ -529,13 +529,13 @@ mod tests {
             .field_errors
             .invalid_fields
             .contains(&"oscilacao_comprimento"));
-        // Em Y a tocha anda para frente e para tras: nao ha limite radial.
+        // Em Y o Y faz o raio: o mesmo limite radial do X.
         let mut em_y = Params::default();
         em_y.apply_operation(Operation::Bolacha);
         em_y.bolacha_oscilar = true;
         em_y.bolacha_osc_eixo = BolachaOscEixo::Y;
         em_y.oscilacao_comprimento = 40.0;
-        assert!(compute_all(em_y, &cfg, 3).is_ok());
+        assert!(!compute_all(em_y, &cfg, 3).is_ok());
     }
 
     /// Faz `poll()` até chegar um resultado ou estourar `timeout`.

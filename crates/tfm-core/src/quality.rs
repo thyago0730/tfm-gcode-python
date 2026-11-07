@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::config::{read_json_value, write_json_pretty4};
-use crate::params::{lenient_f64, lenient_string, BolachaOscEixo, Params, WeldingMode};
+use crate::params::{lenient_f64, lenient_string, Params, WeldingMode};
 
 /// Operadores (em `data_dir`).
 pub const OPERATORS_FILE: &str = "operators.json";
@@ -850,15 +850,6 @@ impl QualityManager {
             if freq > 5.0 {
                 warnings.push(format!(
                     "Frequência de oscilação estimada ({freq:.1} Hz) pode ser muito alta para a mesa."
-                ));
-            }
-            // Em Y a tocha corre junto da mesa: a velocidade relativa à peça
-            // vai de `1 - 2L/P` a `1 + 2L/P` da pedida, e com `2L/P >= 1` ela
-            // chega a zero ou muda de sentido.
-            let razao = 2.0 * p.oscilacao_comprimento / p.bolacha_osc_periodo_mm;
-            if p.bolacha_osc_eixo == BolachaOscEixo::Y && razao >= 1.0 {
-                warnings.push(format!(
-                    "Oscilação em Y: a tocha chega a parar ou recuar em relação à peça                      (2 × comprimento ÷ período = {razao:.1}). Aumente o período ou reduza o comprimento."
                 ));
             }
         }

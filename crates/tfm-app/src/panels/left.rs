@@ -94,11 +94,7 @@ mod tip {
     pub const BOLACHA_OSCILAR: &str = "O raio (X) vai e volta em torno da trajetória enquanto a \
         mesa gira. O passo entre voltas passa a usar a largura do cordão mais o comprimento da \
         oscilação, e a onda fecha dentro das bordas da peça.";
-    pub const BOLACHA_OSC_EIXO: &str =
-        "Radial (X): o raio vai e volta e a onda varre a largura do \
-        cordão; o passo entre voltas cresce. Tangencial (Y): a tocha vai e volta em Y, para frente \
-        e para trás, enquanto a mesa gira na velocidade pedida; o X segue a trajetória e o Y0 é o \
-        centro da onda. Em Y a velocidade da tocha em relação à peça sobe e desce.";
+    pub const BOLACHA_OSC_EIXO: &str = "Onde a tocha está montada. Em X ela fica à direita do centro e o X faz o raio e a oscilação. Em Y ela fica atrás, sobre o eixo Y, com X em 0: o Y faz o raio e a oscilação, para frente e para trás. A solda é a mesma; muda só o eixo da máquina.";
     pub const BOLACHA_OSC_COMPRIMENTO: &str =
         "Quanto a tocha varia de ponta a ponta (pico a pico). \
         No eixo X precisa caber na largura radial da bolacha; no Y não há esse limite.";
@@ -621,8 +617,8 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                     "Eixo da oscilação:",
                     |s| &mut s.bolacha_osc_eixo,
                     &[
-                        (BolachaOscEixo::X, "Radial (X)"),
-                        (BolachaOscEixo::Y, "Tangencial (Y)"),
+                        (BolachaOscEixo::X, "Tocha em X (à direita)"),
+                        (BolachaOscEixo::Y, "Tocha em Y (atrás)"),
                     ],
                     tip::BOLACHA_OSC_EIXO,
                 );
@@ -649,8 +645,8 @@ fn tab_parametros(f: &mut Form, ui: &mut Ui) {
                     |s| &mut s.bolacha_osc_sentido,
                     if f.state.bolacha_osc_eixo == BolachaOscEixo::Y {
                         &[
-                            (BolachaOscSentido::ParaFora, "Y positivo"),
-                            (BolachaOscSentido::ParaDentro, "Y negativo"),
+                            (BolachaOscSentido::ParaFora, "Para fora (Y positivo)"),
+                            (BolachaOscSentido::ParaDentro, "Para dentro (Y negativo)"),
                         ]
                     } else {
                         &[

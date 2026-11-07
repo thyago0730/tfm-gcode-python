@@ -194,7 +194,7 @@ pub fn validate_physical(p: &Params) -> FieldErrors {
 /// Regras da oscilação da bolacha, só com ela ligada.
 fn bolacha_oscilation_rules(p: &Params, fe: &mut FieldErrors) {
     use crate::gcode::bolacha_osc::{MIN_PERIODO_MM, MIN_PONTOS_CICLO};
-    use crate::params::{BolachaOscEixo, BolachaOscForma};
+    use crate::params::BolachaOscForma;
     let r_ext = p.diametro / 2.0;
     let r_int = (p.diametro_interno / 2.0).max(p.largura_cordao / 2.0);
     if p.oscilacao_comprimento <= 0.0 {
@@ -202,7 +202,7 @@ fn bolacha_oscilation_rules(p: &Params, fe: &mut FieldErrors) {
             "Comprimento de oscilação deve ser maior que zero.",
             &["oscilacao_comprimento"],
         );
-    } else if p.bolacha_osc_eixo == BolachaOscEixo::X && p.oscilacao_comprimento >= r_ext - r_int {
+    } else if p.oscilacao_comprimento >= r_ext - r_int {
         fe.fail(
             format!(
                 "Comprimento de oscilação ({}mm) não cabe na largura radial da bolacha ({}mm).",

@@ -159,13 +159,13 @@ pub enum BolachaOscForma {
 /// Eixo em que a tocha oscila na bolacha (`bolacha_osc_eixo`).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BolachaOscEixo {
-    /// O X (raio) vai e volta: a onda varre a largura do cordão.
+    /// A tocha fica à direita, sobre o eixo X: o X faz o raio e a oscilação.
     #[default]
     #[serde(rename = "Radial (X)")]
     X,
-    /// A tocha vai e volta em Y, para frente e para trás, enquanto a mesa gira
-    /// na velocidade pedida. Y0 é o centro da onda.
-    #[serde(rename = "Tangencial (Y)")]
+    /// A tocha fica atrás, sobre o eixo Y (X = 0): o Y faz o raio e a
+    /// oscilação, para frente e para trás. "Tangencial (Y)" é o nome antigo.
+    #[serde(rename = "Radial (Y)", alias = "Tangencial (Y)")]
     Y,
 }
 
